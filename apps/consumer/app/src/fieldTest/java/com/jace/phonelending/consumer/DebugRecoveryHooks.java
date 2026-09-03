@@ -4,8 +4,14 @@ import android.app.AlertDialog;
 import android.app.admin.DevicePolicyManager;
 import android.content.Context;
 import android.content.SharedPreferences;
+import android.graphics.Typeface;
 import android.text.InputType;
+import android.view.Gravity;
+import android.view.ViewGroup;
+import android.widget.Button;
 import android.widget.EditText;
+import android.widget.LinearLayout;
+import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
 
@@ -17,14 +23,94 @@ public final class DebugRecoveryHooks {
     private static final String PIN = "fieldPin";
     private static final String FAILURES = "fieldFailures";
     private static final String COOLDOWN = "fieldCooldownUntil";
+    private static final String PROVISIONING_ACK = "provisioningPinAcknowledged";
 
     private DebugRecoveryHooks() {}
 
     public static void augmentUnprovisioned(MainActivity activity) {
         String pin = ensurePin(activity);
         activity.debugWarning("FIELD-TEST BUILD — NOT PRODUCTION");
-        activity.debugLabelValue("Field recovery PIN", pin);
-        activity.debugBody("Normal APK installation is supported. Full Device Owner / locking behavior still requires Android managed provisioning on a fresh or factory-reset test phone. Record this device-specific PIN before managed-device testing.");
+        activity.debugLabelValue("Current-install recovery PIN", pin);
+        activity.debugBody("Normal APK installation is supported. If this exact installation is provisioned without a factory reset, this PIN remains valid. If you factory-reset for QR managed provisioning, Android erases this installation and this PIN. PhoneLending will generate and show a NEW post-reset recovery PIN during managed provisioning before restricted kiosk policy is applied.");
+    }
+
+    /**
+     * Intercepts admin-integrated provisioning only for the field-test source set.
+     * The credential is generated after the managed APK is installed on the
+     * freshly reset device, then shown before restricted HOME is committed.
+     */
+    public static boolean showProvisioningRecoveryGate(
+            PolicyComplianceActivity activity,
+            Runnable onConfirmed) {
+        SharedPreferences p = prefs(activity);
+        if (p.getBoolean(PROVISIONING_ACK, false)) return false;
+
+        String pin = ensurePin(activity);
+        int density = Math.round(activity.getResources().getDisplayMetrics().density);
+        int side = 24 * density;
+
+        ScrollView scroll = new ScrollView(activity);
+        LinearLayout root = new LinearLayout(activity);
+        root.setOrientation(LinearLayout.VERTICAL);
+        root.setGravity(Gravity.CENTER_HORIZONTAL);
+        root.setPadding(side, 28 * density, side, 28 * density);
+        scroll.addView(root, new ScrollView.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT));
+
+        TextView title = text(activity, "PhoneLending Owner Setup", 24, Typeface.BOLD);
+        title.setGravity(Gravity.CENTER);
+        root.addView(title, matchWrap());
+
+        TextView warning = text(activity, "FIELD-TEST RECOVERY CREDENTIAL", 18, Typeface.BOLD);
+        warning.setGravity(Gravity.CENTER);
+        warning.setPadding(0, 22 * density, 0, 12 * density);
+        root.addView(warning, matchWrap());
+
+        TextView body = text(activity,
+                "Record this NEW recovery PIN now. It belongs to the post-reset managed installation. PhoneLending will not apply its restricted HOME/kiosk policy until you acknowledge this step.",
+                16,
+                Typeface.NORMAL);
+        body.setGravity(Gravity.CENTER);
+        body.setPadding(0, 8 * density, 0, 16 * density);
+        root.addView(body, matchWrap());
+
+        TextView pinView = text(activity, pin, 34, Typeface.BOLD);
+        pinView.setTypeface(Typeface.MONOSPACE, Typeface.BOLD);
+        pinView.setTextIsSelectable(true);
+        pinView.setGravity(Gravity.CENTER);
+        pinView.setPadding(12 * density, 18 * density, 12 * density, 18 * density);
+        root.addView(pinView, matchWrap());
+
+        TextView fallback = text(activity,
+                "Independent field-test fallback: a factory reset remains available if software recovery fails. This PIN is test-only and is not the production recovery design.",
+                14,
+                Typeface.NORMAL);
+        fallback.setGravity(Gravity.CENTER);
+        fallback.setPadding(0, 14 * density, 0, 20 * density);
+        root.addView(fallback, matchWrap());
+
+        Button confirm = new Button(activity);
+        confirm.setText("I HAVE RECORDED THIS PIN");
+        confirm.setAllCaps(false);
+        confirm.setTextSize(15);
+        confirm.setOnClickListener(v -> new AlertDialog.Builder(activity)
+                .setTitle("Continue managed setup?")
+                .setMessage("After continuing, PhoneLending will enter its managed restricted setup state. Keep the recovery PIN somewhere available to the owner/technician.")
+                .setNegativeButton("Go back", null)
+                .setPositiveButton("Continue", (d, w) -> {
+                    p.edit().putBoolean(PROVISIONING_ACK, true).commit();
+                    onConfirmed.run();
+                })
+                .show());
+        LinearLayout.LayoutParams buttonLp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                56 * density);
+        buttonLp.setMargins(0, 8 * density, 0, 8 * density);
+        root.addView(confirm, buttonLp);
+
+        activity.setContentView(scroll);
+        return true;
     }
 
     public static void attachFooter(MainActivity activity, TextView footer) {
@@ -82,6 +168,7 @@ public final class DebugRecoveryHooks {
             activity.policy().exitLockTask(activity);
             activity.pairing().resetPairing();
             activity.sessions().setState(SessionStore.UNPROVISIONED);
+            prefs(activity).edit().putBoolean(PROVISIONING_ACK, false).commit();
             DevicePolicyManager dpm = (DevicePolicyManager) activity.getSystemService(Context.DEVICE_POLICY_SERVICE);
             if (dpm == null || !dpm.isDeviceOwnerApp(activity.getPackageName())) {
                 Toast.makeText(activity, "Field Device Owner is not active", Toast.LENGTH_LONG).show();
@@ -155,5 +242,20 @@ public final class DebugRecoveryHooks {
         if (failures >= 5) e.putInt(FAILURES, 0).putLong(COOLDOWN, System.currentTimeMillis() + 60_000L);
         e.commit();
         return false;
+    }
+
+    private static TextView text(Context context, String value, int sizeSp, int style) {
+        TextView t = new TextView(context);
+        t.setText(value);
+        t.setTextSize(sizeSp);
+        t.setTextColor(0xFF111111);
+        t.setTypeface(Typeface.DEFAULT, style);
+        return t;
+    }
+
+    private static LinearLayout.LayoutParams matchWrap() {
+        return new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT);
     }
 }
