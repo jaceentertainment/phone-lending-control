@@ -43,7 +43,7 @@ jobs:
           BASE="$(find /tmp/pl043/unsigned -type f -name 'PhoneLending-Consumer-v0.4.3-vc5-field-UNSIGNED.apk' -print -quit)"
           test -n "$BASE" || { echo 'ERROR: exact unsigned Field APK not found'; exit 1; }
           cp "$BASE" /tmp/pl043/field-unsigned.apk
-          test "$(sha256sum /tmp/pl043/field-unsigned.apk | awk '{print $1}')" = "aa979d4547e9968cfd18a4dbef94a062ed3032e51e17f0a9818238454141e05f" || {
+          test "$(sha256sum /tmp/pl043/field-unsigned.apk | awk '{print $1}')" = "8771be5f87bd4aab380fb081ab3b1b0ec3d54ddc30460d0d97299eed9948eb1a" || {
             echo 'ERROR: unsigned base artifact checksum mismatch'; exit 1;
           }
 
