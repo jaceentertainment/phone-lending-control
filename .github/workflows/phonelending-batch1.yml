@@ -89,12 +89,13 @@ jobs:
           HOST_APK="$(find apps/host/app/build/outputs/apk/debug -maxdepth 1 -type f -name '*.apk' | head -n 1)"
           ENG_APK="$(find apps/consumer/app/build/outputs/apk/debug -maxdepth 1 -type f -name '*.apk' | head -n 1)"
           FIELD_APK="$(find apps/consumer/app/build/outputs/apk/fieldTest -maxdepth 1 -type f -name '*.apk' | head -n 1)"
-          cp "$HOST_APK" unsigned-dist/PhoneLending-Host-v0.4.2-vc4-UNSIGNED.apk
+          cp "$HOST_APK" unsigned-dist/PhoneLending-Host-v0.4.1-vc3-UNSIGNED.apk
           cp "$ENG_APK" unsigned-dist/PhoneLending-Consumer-v0.4.2-vc4-engineering-UNSIGNED.apk
           cp "$FIELD_APK" unsigned-dist/PhoneLending-Consumer-v0.4.2-vc4-field-UNSIGNED.apk
           cat > unsigned-dist/NON_DISTRIBUTABLE.txt <<'EOF'
           THESE APKs ARE UNSIGNED COMPILE ARTIFACTS.
           They are not PhoneLending distributions until signed by the pinned external development identities and independently verified.
+          Host remains v0.4.1/vc3 in this Consumer-only field-provisioning change; do not relabel it v0.4.2.
           EOF
           sha256sum unsigned-dist/*.apk > unsigned-dist/SHA256SUMS.txt
           cp "$ANDROID_HOME/build-tools/36.0.0/lib/apksigner.jar" signing-tool/apksigner-36.0.0.jar
