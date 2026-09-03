@@ -24,11 +24,8 @@ public final class PairingManager {
             String suffix = androidId == null ? randomDigits(6) : androidId.substring(Math.max(0, androidId.length() - Math.min(6, androidId.length()))).toUpperCase();
             prefs.edit().putString("deviceId", "PL-" + suffix).commit();
         }
-        if (!prefs.contains("pairCode")) {
+        if (!prefs.contains("pairCode") && !prefs.getBoolean("paired", false)) {
             prefs.edit().putString("pairCode", randomDigits(12)).commit();
-        }
-        if (!prefs.contains("devPin")) {
-            prefs.edit().putString("devPin", randomDigits(8)).commit();
         }
     }
 
@@ -40,7 +37,6 @@ public final class PairingManager {
 
     public String getDeviceId() { return prefs.getString("deviceId", "PL-UNKNOWN"); }
     public String getPairCode() { return prefs.getString("pairCode", ""); }
-    public String getDevPin() { return prefs.getString("devPin", ""); }
     public boolean isPaired() { return prefs.getBoolean("paired", false); }
     public String getHostId() { return prefs.getString("hostId", ""); }
 
@@ -63,28 +59,6 @@ public final class PairingManager {
     public synchronized void resetPairing() {
         prefs.edit().clear().commit();
         ensureIdentity();
-    }
-
-    public synchronized long devCooldownRemainingMs() {
-        long until = prefs.getLong("devCooldownUntil", 0L);
-        return Math.max(0L, until - System.currentTimeMillis());
-    }
-
-    public synchronized boolean verifyDevPin(String candidate) {
-        long cooldown = devCooldownRemainingMs();
-        if (cooldown > 0L) return false;
-        boolean ok = getDevPin().equals(candidate == null ? "" : candidate.trim());
-        if (ok) {
-            prefs.edit().putInt("devFailures", 0).remove("devCooldownUntil").commit();
-            return true;
-        }
-        int failures = prefs.getInt("devFailures", 0) + 1;
-        SharedPreferences.Editor e = prefs.edit().putInt("devFailures", failures);
-        if (failures >= 5) {
-            e.putInt("devFailures", 0).putLong("devCooldownUntil", System.currentTimeMillis() + 60_000L);
-        }
-        e.commit();
-        return false;
     }
 
     public byte[] getSharedKey() {
