@@ -8,6 +8,8 @@ import android.app.Service;
 import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
+import android.net.nsd.NsdManager;
+import android.net.nsd.NsdServiceInfo;
 import android.os.Build;
 import android.os.Handler;
 import android.os.IBinder;
@@ -15,36 +17,52 @@ import android.os.Looper;
 import android.os.VibrationEffect;
 import android.os.Vibrator;
 import android.os.VibratorManager;
+import android.util.Base64;
+
+import org.json.JSONObject;
 
 import java.io.BufferedReader;
 import java.io.BufferedWriter;
 import java.io.InputStreamReader;
 import java.io.OutputStreamWriter;
-import java.net.ServerSocket;
 import java.net.Socket;
 import java.nio.charset.StandardCharsets;
+import java.security.SecureRandom;
 import java.util.ArrayDeque;
 import java.util.HashSet;
 import java.util.Set;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
+import javax.net.ssl.SSLServerSocket;
+import javax.net.ssl.SSLSocket;
+
 public class ConsumerService extends Service {
-    public static final int PORT = 42424;
+    public static final String SERVICE_TYPE = "_phonelending._tcp.";
+    public static final int PROTOCOL_VERSION = 2;
+
     private static final String STATUS_CHANNEL = "rental_status";
     private static final String WARNING_CHANNEL = "rental_warning";
     private static final int STATUS_NOTIFICATION = 1001;
     private static final int WARNING_NOTIFICATION = 1002;
+    private static final String CAPABILITIES = "status,start,extend,end,prepare,maintenance,relock";
+
+    private static volatile int advertisedPort = 0;
+    private static volatile String advertisedServiceName = "";
 
     private final Handler handler = new Handler(Looper.getMainLooper());
     private final ExecutorService io = Executors.newCachedThreadPool();
+    private final SecureRandom random = new SecureRandom();
     private SessionStore sessions;
     private PairingManager pairing;
     private PolicyController policy;
     private SharedPreferences replayPrefs;
     private final ArrayDeque<String> recentCommandIds = new ArrayDeque<>();
     private final Set<String> recentCommandSet = new HashSet<>();
-    private volatile ServerSocket serverSocket;
+    private volatile SSLServerSocket serverSocket;
+    private NsdManager nsdManager;
+    private NsdManager.RegistrationListener registrationListener;
+    private boolean nsdRegistered;
     private String warningSession = "";
     private boolean warned60;
     private boolean warned30;
@@ -59,33 +77,34 @@ public class ConsumerService extends Service {
         } catch (Throwable ignored) {}
     }
 
+    public static int advertisedPort() { return advertisedPort; }
+    public static String advertisedServiceName() { return advertisedServiceName; }
+
     @Override
     public void onCreate() {
         super.onCreate();
         sessions = new SessionStore(this);
         pairing = new PairingManager(this);
         policy = new PolicyController(this);
-        replayPrefs = createDeviceProtectedStorageContext().getSharedPreferences("replay_cache", MODE_PRIVATE);
+        replayPrefs = createDeviceProtectedStorageContext().getSharedPreferences("replay_cache_v2", MODE_PRIVATE);
         loadReplayCache();
         createChannels();
         startForeground(STATUS_NOTIFICATION, buildStatusNotification());
         policy.grantRequiredNotificationPermissionIfPossible();
-        io.execute(this::runServer);
+        io.execute(this::runSecureServer);
         handler.post(tick);
     }
 
-    @Override
-    public int onStartCommand(Intent intent, int flags, int startId) {
-        return START_STICKY;
-    }
-
-    @Override
-    public IBinder onBind(Intent intent) { return null; }
+    @Override public int onStartCommand(Intent intent, int flags, int startId) { return START_STICKY; }
+    @Override public IBinder onBind(Intent intent) { return null; }
 
     @Override
     public void onDestroy() {
         handler.removeCallbacksAndMessages(null);
+        unregisterNsd();
         try { if (serverSocket != null) serverSocket.close(); } catch (Exception ignored) {}
+        advertisedPort = 0;
+        advertisedServiceName = "";
         io.shutdownNow();
         super.onDestroy();
     }
@@ -178,7 +197,7 @@ public class ConsumerService extends Service {
         } else if (SessionStore.ADMIN_MAINTENANCE.equals(state)) {
             b.setContentText("Owner maintenance active — " + formatDuration(sessions.maintenanceRemainingSeconds()));
         } else if (SessionStore.UNPROVISIONED.equals(state)) {
-            b.setContentText("Development setup required");
+            b.setContentText("Business provisioning required");
         } else {
             b.setContentText("Rental device locked — " + state);
         }
@@ -237,30 +256,71 @@ public class ConsumerService extends Service {
         } catch (Throwable ignored) {}
     }
 
-    private void bringMainActivity() {
+    private void runSecureServer() {
         try {
-            Intent i = new Intent(this, MainActivity.class);
-            i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_SINGLE_TOP);
-            startActivity(i);
-        } catch (Throwable ignored) {}
-    }
-
-    private void runServer() {
-        try (ServerSocket ss = new ServerSocket(PORT)) {
+            SSLServerSocket ss = (SSLServerSocket) pairing.serverSslContext().getServerSocketFactory().createServerSocket(0);
+            ss.setNeedClientAuth(false);
             serverSocket = ss;
+            advertisedPort = ss.getLocalPort();
+            registerNsd(advertisedPort);
             while (!Thread.currentThread().isInterrupted()) {
                 Socket socket = ss.accept();
                 io.execute(() -> handleClient(socket));
             }
-        } catch (Exception ignored) {
+        } catch (Exception e) {
+            advertisedPort = 0;
+            advertisedServiceName = "";
         }
     }
 
+    private void registerNsd(int port) {
+        try {
+            nsdManager = (NsdManager) getSystemService(Context.NSD_SERVICE);
+            if (nsdManager == null) return;
+            NsdServiceInfo info = new NsdServiceInfo();
+            info.setServiceName("PhoneLending-" + pairing.getDeviceId().replace("PL-", ""));
+            info.setServiceType(SERVICE_TYPE);
+            info.setPort(port);
+            if (Build.VERSION.SDK_INT >= 21) {
+                info.setAttribute("eid", pairing.getDeviceId());
+                info.setAttribute("pv", String.valueOf(PROTOCOL_VERSION));
+            }
+            registrationListener = new NsdManager.RegistrationListener() {
+                @Override public void onServiceRegistered(NsdServiceInfo serviceInfo) {
+                    advertisedServiceName = serviceInfo.getServiceName();
+                    nsdRegistered = true;
+                }
+                @Override public void onRegistrationFailed(NsdServiceInfo serviceInfo, int errorCode) {
+                    advertisedServiceName = "";
+                    nsdRegistered = false;
+                }
+                @Override public void onServiceUnregistered(NsdServiceInfo serviceInfo) {
+                    advertisedServiceName = "";
+                    nsdRegistered = false;
+                }
+                @Override public void onUnregistrationFailed(NsdServiceInfo serviceInfo, int errorCode) {}
+            };
+            nsdManager.registerService(info, NsdManager.PROTOCOL_DNS_SD, registrationListener);
+        } catch (Throwable ignored) {
+            advertisedServiceName = "";
+        }
+    }
+
+    private void unregisterNsd() {
+        try {
+            if (nsdRegistered && nsdManager != null && registrationListener != null) {
+                nsdManager.unregisterService(registrationListener);
+            }
+        } catch (Throwable ignored) {}
+        nsdRegistered = false;
+    }
+
     private void handleClient(Socket socket) {
-        try (Socket s = socket;
+        try (SSLSocket s = (SSLSocket) socket;
              BufferedReader in = new BufferedReader(new InputStreamReader(s.getInputStream(), StandardCharsets.UTF_8));
              BufferedWriter out = new BufferedWriter(new OutputStreamWriter(s.getOutputStream(), StandardCharsets.UTF_8))) {
             s.setSoTimeout(7000);
+            s.startHandshake();
             String line = in.readLine();
             String response = processLine(line == null ? "" : line.trim());
             out.write(response);
@@ -271,36 +331,88 @@ public class ConsumerService extends Service {
 
     private synchronized String processLine(String line) {
         try {
-            String[] p = line.split("\\|", -1);
-            if (p.length >= 3 && "PAIR".equals(p[0])) {
-                String hostId = p[1];
-                String code = p[2];
-                if (pairing.isPaired()) return "ERROR|already_paired";
-                if (!pairing.pair(hostId, code)) return "ERROR|pairing_rejected";
-                return "PAIRED|" + pairing.getDeviceId() + "|" + sessions.getState() + "|" + sessions.remainingSeconds() + "|1";
-            }
-            if (p.length != 6 || !"CMD".equals(p[0])) return "ERROR|bad_format";
-            if (!pairing.isPaired()) return "ERROR|not_paired";
-            String commandId = p[1];
-            long timestamp = Long.parseLong(p[2]);
-            String command = p[3];
-            String payload = p[4];
-            String signature = p[5];
-            long now = System.currentTimeMillis();
-            if (Math.abs(now - timestamp) > 300_000L) return ack(commandId, false, "stale_command");
-            if (recentCommandSet.contains(commandId)) return ack(commandId, false, "replay_rejected");
-            byte[] key = pairing.getSharedKey();
-            if (key == null) return ack(commandId, false, "missing_key");
-            String signed = commandId + "|" + timestamp + "|" + command + "|" + payload;
-            String expected = CryptoUtils.hmacBase64(key, signed);
-            if (!CryptoUtils.constantTimeEquals(expected, signature)) return ack(commandId, false, "bad_signature");
-            rememberCommand(commandId);
-
-            boolean ok = executeCommand(command, payload);
-            return ack(commandId, ok, ok ? "ok" : "invalid_state_or_payload");
+            JSONObject request = new JSONObject(line);
+            String type = request.optString("type", "");
+            if ("PAIR_INIT".equals(type)) return processPair(request).toString();
+            if ("CMD".equals(type)) return processCommand(request).toString();
+            return error("bad_type").toString();
         } catch (Exception e) {
-            return "ERROR|exception";
+            return error("bad_format").toString();
         }
+    }
+
+    private JSONObject processPair(JSONObject request) throws Exception {
+        if (!policy.isDeviceOwner()) return error("not_provisioned");
+        if (SessionStore.ACTIVE.equals(sessions.getState())) return error("pairing_not_allowed_active");
+
+        int protocol = request.optInt("protocol", 0);
+        String sid = request.optString("sessionId", "");
+        String token = request.optString("token", "");
+        String hostId = request.optString("hostId", "");
+        String hostPublicKey = request.optString("hostPublicKey", "");
+        String hostNonce = request.optString("hostNonce", "");
+        String signature = request.optString("signature", "");
+
+        PairingManager.PairResult result = pairing.pair(protocol, sid, token, hostId, hostPublicKey, hostNonce, signature);
+        if (!result.ok) return error(result.error);
+
+        String consumerNonce = randomToken(16);
+        String state = sessions.getState();
+        long remaining = sessions.remainingSeconds();
+        String sessionId = sessions.getSessionId();
+        String publicKey = pairing.consumerPublicKeyBase64();
+        String canonical = pairAckCanonical(hostId, hostNonce, consumerNonce, result.authorizationRevision,
+                state, remaining, sessionId, publicKey);
+        String ackSignature = pairing.signAsConsumer(canonical);
+
+        JSONObject ack = new JSONObject();
+        ack.put("type", "PAIR_ACK");
+        ack.put("protocol", PROTOCOL_VERSION);
+        ack.put("deviceId", pairing.getDeviceId());
+        ack.put("hostId", hostId);
+        ack.put("hostNonce", hostNonce);
+        ack.put("consumerNonce", consumerNonce);
+        ack.put("authorizationRevision", result.authorizationRevision);
+        ack.put("state", state);
+        ack.put("remaining", remaining);
+        ack.put("sessionId", sessionId);
+        ack.put("capabilities", CAPABILITIES);
+        ack.put("consumerPublicKey", publicKey);
+        ack.put("signature", ackSignature);
+        handler.post(() -> policy.applyRestrictedAndBringToFront());
+        return ack;
+    }
+
+    private JSONObject processCommand(JSONObject request) throws Exception {
+        if (!pairing.isPaired()) return error("not_paired");
+        int protocol = request.optInt("protocol", 0);
+        if (protocol != PROTOCOL_VERSION) return commandError(request, "protocol_mismatch");
+
+        String commandId = request.optString("commandId", "");
+        String hostId = request.optString("hostId", "");
+        String target = request.optString("target", "");
+        String sessionId = request.optString("sessionId", "");
+        long issuedAt = request.optLong("issuedAt", 0L);
+        String nonce = request.optString("nonce", "");
+        String command = request.optString("command", "");
+        String payload = request.optString("payload", "");
+        String signature = request.optString("signature", "");
+
+        if (!pairing.getHostId().equals(hostId)) return commandError(request, "wrong_host");
+        if (!pairing.getDeviceId().equals(target)) return commandError(request, "wrong_target");
+        if (commandId.isEmpty() || nonce.isEmpty()) return commandError(request, "missing_command_identity");
+        long now = System.currentTimeMillis();
+        if (Math.abs(now - issuedAt) > 300_000L) return commandError(request, "stale_command");
+        if (recentCommandSet.contains(commandId)) return commandError(request, "replay_rejected");
+
+        String canonical = commandCanonical(protocol, commandId, hostId, target, sessionId, issuedAt, nonce, command, payload);
+        if (!pairing.verifyHostSignature(canonical, signature)) return commandError(request, "bad_signature");
+        if (("EXTEND".equals(command) || "END".equals(command)) && !sessions.getSessionId().equals(sessionId))
+            return commandError(request, "session_mismatch");
+
+        rememberCommand(commandId);
+        boolean ok = executeCommand(command, payload);
+        return commandAck(commandId, nonce, ok, ok ? "ok" : "invalid_state_or_payload");
     }
 
     private boolean executeCommand(String command, String payload) {
@@ -309,12 +421,11 @@ public class ConsumerService extends Service {
             case "STATUS":
                 return true;
             case "START": {
-                if (!SessionStore.AVAILABLE_LOCKED.equals(state)) return false;
+                if (!SessionStore.AVAILABLE_LOCKED.equals(state) || !pairing.isPaired()) return false;
                 long seconds = parsePositive(payload, 24 * 3600L);
                 if (seconds <= 0) return false;
                 sessions.startSession(seconds);
-                policy.clearLockedHome();
-                bringMainActivity();
+                policy.applyActiveAndOpenHome();
                 return true;
             }
             case "EXTEND": {
@@ -349,6 +460,58 @@ public class ConsumerService extends Service {
         }
     }
 
+    private JSONObject commandAck(String commandId, String nonce, boolean ok, String message) throws Exception {
+        String state = sessions.getState();
+        long remaining = sessions.remainingSeconds();
+        String sessionId = sessions.getSessionId();
+        String canonical = ackCanonical(commandId, nonce, ok, state, remaining, sessionId, message);
+        JSONObject ack = new JSONObject();
+        ack.put("type", "ACK");
+        ack.put("protocol", PROTOCOL_VERSION);
+        ack.put("commandId", commandId);
+        ack.put("accepted", ok);
+        ack.put("state", state);
+        ack.put("remaining", remaining);
+        ack.put("sessionId", sessionId);
+        ack.put("message", message);
+        ack.put("nonce", nonce);
+        ack.put("signature", pairing.signAsConsumer(canonical));
+        return ack;
+    }
+
+    private JSONObject commandError(JSONObject request, String message) throws Exception {
+        String commandId = request.optString("commandId", "");
+        String nonce = request.optString("nonce", "");
+        return commandAck(commandId, nonce, false, message);
+    }
+
+    private JSONObject error(String message) throws Exception {
+        JSONObject o = new JSONObject();
+        o.put("type", "ERROR");
+        o.put("protocol", PROTOCOL_VERSION);
+        o.put("message", message);
+        return o;
+    }
+
+    public static String commandCanonical(int protocol, String commandId, String hostId, String target,
+                                          String sessionId, long issuedAt, String nonce, String command, String payload) {
+        return "CMD|" + protocol + "|" + safe(commandId) + "|" + safe(hostId) + "|" + safe(target)
+                + "|" + safe(sessionId) + "|" + issuedAt + "|" + safe(nonce) + "|" + safe(command) + "|" + safe(payload);
+    }
+
+    public static String ackCanonical(String commandId, String nonce, boolean accepted, String state,
+                                      long remaining, String sessionId, String message) {
+        return "ACK|" + PROTOCOL_VERSION + "|" + safe(commandId) + "|" + safe(nonce) + "|" + accepted
+                + "|" + safe(state) + "|" + remaining + "|" + safe(sessionId) + "|" + safe(message);
+    }
+
+    public static String pairAckCanonical(String hostId, String hostNonce, String consumerNonce, int revision,
+                                          String state, long remaining, String sessionId, String consumerPublicKey) {
+        return "PAIR_ACK|" + PROTOCOL_VERSION + "|" + safe(hostId) + "|" + safe(hostNonce) + "|"
+                + safe(consumerNonce) + "|" + revision + "|" + safe(state) + "|" + remaining + "|"
+                + safe(sessionId) + "|" + safe(consumerPublicKey) + "|" + CAPABILITIES;
+    }
+
     private long parsePositive(String value, long max) {
         try {
             long v = Long.parseLong(value);
@@ -356,8 +519,10 @@ public class ConsumerService extends Service {
         } catch (Exception e) { return -1L; }
     }
 
-    private String ack(String id, boolean ok, String message) {
-        return "ACK|" + id + "|" + (ok ? "OK" : "REJECTED") + "|" + sessions.getState() + "|" + sessions.remainingSeconds() + "|" + message;
+    private String randomToken(int bytes) {
+        byte[] value = new byte[bytes];
+        random.nextBytes(value);
+        return Base64.encodeToString(value, Base64.NO_WRAP | Base64.URL_SAFE | Base64.NO_PADDING);
     }
 
     private void loadReplayCache() {
@@ -372,7 +537,7 @@ public class ConsumerService extends Service {
     private void rememberCommand(String id) {
         recentCommandIds.addLast(id);
         recentCommandSet.add(id);
-        while (recentCommandIds.size() > 50) {
+        while (recentCommandIds.size() > 100) {
             String removed = recentCommandIds.removeFirst();
             recentCommandSet.remove(removed);
         }
@@ -390,4 +555,6 @@ public class ConsumerService extends Service {
         long s = totalSeconds % 60;
         return String.format(java.util.Locale.US, "%02d:%02d:%02d", h, m, s);
     }
+
+    private static String safe(String s) { return s == null ? "" : s; }
 }
