@@ -30,8 +30,29 @@ jobs:
         with:
           gradle-version: '8.13'
 
-      - name: Build debug APKs
-        run: gradle --no-daemon :host:assembleDebug :consumer:assembleDebug
+      - name: Build debug APKs and release-boundary check APK
+        run: gradle --no-daemon :host:assembleDebug :consumer:assembleDebug :consumer:assembleRelease
+
+      - name: Verify debug recovery compile-time boundary
+        run: |
+          set -euo pipefail
+          DEBUG_APK="$(find apps/consumer/app/build/outputs/apk/debug -maxdepth 1 -type f -name '*.apk' | head -n 1)"
+          RELEASE_APK="$(find apps/consumer/app/build/outputs/apk/release -maxdepth 1 -type f -name '*.apk' | head -n 1)"
+          test -n "$DEBUG_APK"
+          test -n "$RELEASE_APK"
+          rm -rf /tmp/debug-dex /tmp/release-dex
+          mkdir -p /tmp/debug-dex /tmp/release-dex
+          unzip -q "$DEBUG_APK" 'classes*.dex' -d /tmp/debug-dex
+          unzip -q "$RELEASE_APK" 'classes*.dex' -d /tmp/release-dex
+          if ! grep -a -q 'DebugRecoveryHooks' /tmp/debug-dex/classes*.dex; then
+            echo 'ERROR: debug recovery hook missing from development Consumer APK'
+            exit 1
+          fi
+          if grep -a -q 'DebugRecoveryHooks' /tmp/release-dex/classes*.dex; then
+            echo 'ERROR: development recovery hook leaked into release Consumer APK'
+            exit 1
+          fi
+          echo 'PASS: debug recovery exists only in debug Consumer source/output.'
 
       - name: Collect APKs
         run: |
