@@ -38,7 +38,9 @@ android {
             applicationIdSuffix '.dev'
             versionNameSuffix '-dev'
             debuggable true
-            if (stableDevSigningConfigured) signingConfig signingConfigs.hostDev
+            // Never fall back to Gradle's machine-local debug keystore. Without the
+            // externally supplied pinned signer this build is deliberately unsigned.
+            signingConfig stableDevSigningConfigured ? signingConfigs.hostDev : null
         }
         release {
             minifyEnabled false
@@ -55,7 +57,7 @@ android {
 tasks.register('verifyStableDevSigningConfigured') {
     doLast {
         if (!stableDevSigningConfigured) {
-            throw new GradleException('Stable Host development signing is not configured. Compile-only builds may use the runner debug key, but distributable APKs must provide PL_HOST_DEV_* signing inputs.')
+            throw new GradleException('Stable Host development signing is not configured. Unsigned compile artifacts are allowed, but distributable APKs must provide PL_HOST_DEV_* signing inputs.')
         }
     }
 }
