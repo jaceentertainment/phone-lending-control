@@ -55,13 +55,52 @@ jobs:
           fi
           echo 'PASS: development recovery implementation exists only in engineering Consumer output.'
 
-      - name: Mark push-built APKs non-distributable
+      - name: Verify compile APKs are unsigned, never ephemeral-debug signed
         run: |
-          cat <<'EOF'
-          PASS: source compiles and recovery boundary is intact.
-          NOTE: APKs produced in this compile-only job use runner-local debug signing unless external signing is configured.
-          They are intentionally NOT uploaded as distributable artifacts.
+          set -euo pipefail
+          HOST_APK="$(find apps/host/app/build/outputs/apk/debug -maxdepth 1 -type f -name '*.apk' | head -n 1)"
+          CONSUMER_APK="$(find apps/consumer/app/build/outputs/apk/debug -maxdepth 1 -type f -name '*.apk' | head -n 1)"
+          if apksigner verify "$HOST_APK" >/dev/null 2>&1; then
+            echo 'ERROR: compile-only Host APK is unexpectedly signed. Refusing possible ephemeral signer.'
+            exit 1
+          fi
+          if apksigner verify "$CONSUMER_APK" >/dev/null 2>&1; then
+            echo 'ERROR: compile-only Consumer APK is unexpectedly signed. Refusing possible ephemeral signer.'
+            exit 1
+          fi
+          echo 'PASS: compile-only Host and Consumer APKs are unsigned.'
+
+      - name: Collect unsigned non-distributable APKs and signing tool
+        run: |
+          set -euo pipefail
+          mkdir -p unsigned-dist signing-tool
+          HOST_APK="$(find apps/host/app/build/outputs/apk/debug -maxdepth 1 -type f -name '*.apk' | head -n 1)"
+          CONSUMER_APK="$(find apps/consumer/app/build/outputs/apk/debug -maxdepth 1 -type f -name '*.apk' | head -n 1)"
+          cp "$HOST_APK" unsigned-dist/PhoneLending-Host-v0.4.1-vc3-UNSIGNED.apk
+          cp "$CONSUMER_APK" unsigned-dist/PhoneLending-Consumer-v0.4.1-vc3-engineering-UNSIGNED.apk
+          cat > unsigned-dist/NON_DISTRIBUTABLE.txt <<'EOF'
+          THESE APKs ARE UNSIGNED COMPILE ARTIFACTS.
+          They cannot be installed as PhoneLending distributions until signed by the pinned external development signing identities and verified against signing/*.txt.
           EOF
+          sha256sum unsigned-dist/*.apk > unsigned-dist/SHA256SUMS.txt
+          cp "$ANDROID_HOME/build-tools/36.0.0/lib/apksigner.jar" signing-tool/apksigner-36.0.0.jar
+          sha256sum signing-tool/apksigner-36.0.0.jar > signing-tool/SHA256SUMS.txt
+
+      - name: Upload unsigned compile artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: phonelending-v0.4.1-UNSIGNED-NON-DISTRIBUTABLE
+          path: unsigned-dist/
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload public Android signing tool
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-apksigner-36.0.0
+          path: signing-tool/
+          if-no-files-found: error
+          retention-days: 14
 
       - name: Package exact source snapshot
         run: |
@@ -73,6 +112,8 @@ jobs:
             --exclude '.gradle/' \
             --exclude 'dist/' \
             --exclude 'source-dist/' \
+            --exclude 'unsigned-dist/' \
+            --exclude 'signing-tool/' \
             ./ source-dist/PhoneLending-Control-v0.4.1-source/
           printf '%s\n' '${{ github.sha }}' > source-dist/PhoneLending-Control-v0.4.1-source/SOURCE_COMMIT.txt
           find source-dist/PhoneLending-Control-v0.4.1-source -type f -print0 | sort -z | xargs -0 sha256sum > source-dist/SOURCE_SHA256SUMS.txt
