@@ -2,6 +2,12 @@ plugins {
     id 'com.android.application'
 }
 
+def devStorePath = System.getenv('PL_CONSUMER_DEV_KEYSTORE_PATH') ?: project.findProperty('plConsumerDevKeystorePath')
+def devStorePassword = System.getenv('PL_CONSUMER_DEV_STORE_PASSWORD') ?: project.findProperty('plConsumerDevStorePassword')
+def devKeyAlias = System.getenv('PL_CONSUMER_DEV_KEY_ALIAS') ?: project.findProperty('plConsumerDevKeyAlias')
+def devKeyPassword = System.getenv('PL_CONSUMER_DEV_KEY_PASSWORD') ?: project.findProperty('plConsumerDevKeyPassword')
+def stableDevSigningConfigured = [devStorePath, devStorePassword, devKeyAlias, devKeyPassword].every { it != null && !it.toString().trim().isEmpty() }
+
 android {
     namespace 'com.jace.phonelending.consumer'
     compileSdk 36
@@ -10,8 +16,21 @@ android {
         applicationId 'com.jace.phonelending.consumer'
         minSdk 28
         targetSdk 36
-        versionCode 2
-        versionName '0.4.0'
+        versionCode 3
+        versionName '0.4.1'
+    }
+
+    signingConfigs {
+        if (stableDevSigningConfigured) {
+            consumerDev {
+                storeFile file(devStorePath)
+                storePassword devStorePassword
+                keyAlias devKeyAlias
+                keyPassword devKeyPassword
+                enableV1Signing true
+                enableV2Signing true
+            }
+        }
     }
 
     buildTypes {
@@ -20,6 +39,7 @@ android {
             versionNameSuffix '-dev'
             debuggable true
             manifestPlaceholders = [testOnlyFlag:'true']
+            if (stableDevSigningConfigured) signingConfig signingConfigs.consumerDev
         }
         release {
             minifyEnabled false
@@ -31,6 +51,14 @@ android {
     compileOptions {
         sourceCompatibility JavaVersion.VERSION_17
         targetCompatibility JavaVersion.VERSION_17
+    }
+}
+
+tasks.register('verifyStableDevSigningConfigured') {
+    doLast {
+        if (!stableDevSigningConfigured) {
+            throw new GradleException('Stable Consumer development signing is not configured. Compile-only builds may use the runner debug key, but distributable APKs must provide PL_CONSUMER_DEV_* signing inputs.')
+        }
     }
 }
 
