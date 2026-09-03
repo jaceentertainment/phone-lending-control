@@ -1,0 +1,102 @@
+name: Publish PhoneLending v0.4.3 Provisioning APK
+
+on:
+  push:
+    branches:
+      - provisioning-upload-v0.4.3
+    paths:
+      - '.github/workflows/publish-provisioning-v043.yml'
+      - 'provisioning-upload/v0.4.3/**'
+
+permissions:
+  contents: write
+  actions: read
+
+jobs:
+  reconstruct_verify_publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout staging branch
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android build tools
+        run: sdkmanager "platform-tools" "build-tools;36.0.0"
+
+      - name: Download exact green unsigned artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/pl043
+          curl --fail --location \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/artifacts/9895254461/zip" \
+            -o /tmp/pl043/unsigned-artifact.zip
+          unzip -q /tmp/pl043/unsigned-artifact.zip -d /tmp/pl043/unsigned
+          BASE="$(find /tmp/pl043/unsigned -type f -name 'PhoneLending-Consumer-v0.4.3-vc5-field-UNSIGNED.apk' -print -quit)"
+          test -n "$BASE" || { echo 'ERROR: exact unsigned Field APK not found'; exit 1; }
+          cp "$BASE" /tmp/pl043/field-unsigned.apk
+          test "$(sha256sum /tmp/pl043/field-unsigned.apk | awk '{print $1}')" = "aa979d4547e9968cfd18a4dbef94a062ed3032e51e17f0a9818238454141e05f" || {
+            echo 'ERROR: unsigned base artifact checksum mismatch'; exit 1;
+          }
+
+      - name: Reconstruct exact locally signed APK from verified delta
+        run: |
+          set -euo pipefail
+          base64 -d provisioning-upload/v0.4.3/pl043-signing-delta.zst.b64 > /tmp/pl043/signing-delta.zst
+          zstd -d --patch-from=/tmp/pl043/field-unsigned.apk \
+            /tmp/pl043/signing-delta.zst \
+            -o /tmp/pl043/PhoneLending-Consumer-v0.4.3-vc5-field.apk
+
+      - name: Verify final APK identity, signature, and immutable hash
+        run: |
+          set -euo pipefail
+          APK=/tmp/pl043/PhoneLending-Consumer-v0.4.3-vc5-field.apk
+          EXPECTED_SHA=369d3f53d90b843cf96e0fdbd47ce6d09e947d286c9d3ae4a364dbede220e106
+          EXPECTED_CERT=8b46873ee7d9fec4cecc2faa03694e8001e1ad42accf862257222f74174936c9
+          test "$(sha256sum "$APK" | awk '{print $1}')" = "$EXPECTED_SHA" || { echo 'ERROR: final APK SHA-256 mismatch'; exit 1; }
+          "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --verbose --print-certs "$APK" | tee /tmp/pl043/apksigner.txt
+          grep -qi "Signer #1 certificate SHA-256 digest: ${EXPECTED_CERT}" /tmp/pl043/apksigner.txt || { echo 'ERROR: Consumer development signer mismatch'; exit 1; }
+          "$ANDROID_HOME/build-tools/36.0.0/aapt2" dump packagename "$APK" | grep -qx 'com.jace.phonelending.consumer.field' || { echo 'ERROR: field package ID mismatch'; exit 1; }
+          MANIFEST="$("$ANDROID_HOME/build-tools/36.0.0/aapt2" dump xmltree "$APK" --file AndroidManifest.xml)"
+          if echo "$MANIFEST" | grep 'android:testOnly' | grep -qE '0xffffffff|true'; then
+            echo 'ERROR: published field APK unexpectedly testOnly=true'; exit 1
+          fi
+          echo 'PASS: exact signed Field APK verified.'
+
+      - name: Publish immutable provisioning artifact branch
+        run: |
+          set -euo pipefail
+          APK=/tmp/pl043/PhoneLending-Consumer-v0.4.3-vc5-field.apk
+          git config user.name 'PhoneLending Provisioning Publisher'
+          git config user.email 'actions@users.noreply.github.com'
+          git checkout --orphan provisioning-artifacts
+          git rm -rf .
+          mkdir -p field/v0.4.3
+          cp "$APK" field/v0.4.3/PhoneLending-Consumer-v0.4.3-vc5-field.apk
+          cat > field/v0.4.3/SHA256.txt <<'EOF'
+          369d3f53d90b843cf96e0fdbd47ce6d09e947d286c9d3ae4a364dbede220e106  PhoneLending-Consumer-v0.4.3-vc5-field.apk
+          EOF
+          cat > field/v0.4.3/README.md <<'EOF'
+          # PhoneLending Consumer v0.4.3 Field Provisioning Artifact
+
+          Field-test only. Not production.
+
+          Package: `com.jace.phonelending.consumer.field`
+          Version: `0.4.3-field` / versionCode `5`
+          APK SHA-256: `369d3f53d90b843cf96e0fdbd47ce6d09e947d286c9d3ae4a364dbede220e106`
+          Consumer DEV certificate SHA-256: `8b46873ee7d9fec4cecc2faa03694e8001e1ad42accf862257222f74174936c9`
+
+          This branch intentionally contains only the public, signed provisioning artifact and its public verification metadata. It contains no private signing material.
+          EOF
+          git add field/v0.4.3
+          git commit -m 'Publish immutable PhoneLending Consumer v0.4.3 field provisioning APK'
+          git push --force origin HEAD:provisioning-artifacts
+          echo "PROVISIONING_ARTIFACT_COMMIT=$(git rev-parse HEAD)"
