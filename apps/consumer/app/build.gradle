@@ -39,7 +39,9 @@ android {
             versionNameSuffix '-dev'
             debuggable true
             manifestPlaceholders = [testOnlyFlag:'true']
-            if (stableDevSigningConfigured) signingConfig signingConfigs.consumerDev
+            // Never fall back to Gradle's machine-local debug keystore. Without the
+            // externally supplied pinned signer this build is deliberately unsigned.
+            signingConfig stableDevSigningConfigured ? signingConfigs.consumerDev : null
         }
         release {
             minifyEnabled false
@@ -57,7 +59,7 @@ android {
 tasks.register('verifyStableDevSigningConfigured') {
     doLast {
         if (!stableDevSigningConfigured) {
-            throw new GradleException('Stable Consumer development signing is not configured. Compile-only builds may use the runner debug key, but distributable APKs must provide PL_CONSUMER_DEV_* signing inputs.')
+            throw new GradleException('Stable Consumer development signing is not configured. Unsigned compile artifacts are allowed, but distributable APKs must provide PL_CONSUMER_DEV_* signing inputs.')
         }
     }
 }
