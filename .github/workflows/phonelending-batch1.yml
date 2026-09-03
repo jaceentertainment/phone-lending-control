@@ -1,13 +1,13 @@
-name: PhoneLending v0.4 QR Pairing Build
+name: PhoneLending v0.4.1 Update Continuity Build
 
 on:
   push:
     branches:
-      - batch2-v0.4.0
+      - batch2-v0.4.1-update-continuity
   workflow_dispatch:
 
 jobs:
-  build:
+  compile_and_boundary_check:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -30,7 +30,7 @@ jobs:
         with:
           gradle-version: '8.13'
 
-      - name: Build Host, Consumer debug, and Consumer release-boundary APK
+      - name: Compile Host, Consumer engineering, and Consumer release boundary
         run: gradle --no-daemon :host:assembleDebug :consumer:assembleDebug :consumer:assembleRelease
 
       - name: Verify development recovery compile-time boundary
@@ -46,51 +46,142 @@ jobs:
           unzip -q "$RELEASE_APK" 'classes*.dex' -d /tmp/release-dex
           CLASS_DESCRIPTOR='Lcom/jace/phonelending/consumer/DebugRecoveryHooks;'
           if ! grep -a -q "$CLASS_DESCRIPTOR" /tmp/debug-dex/classes*.dex; then
-            echo 'ERROR: debug recovery implementation missing from development Consumer APK'
+            echo 'ERROR: development recovery implementation missing from engineering Consumer APK'
             exit 1
           fi
           if grep -a -q "$CLASS_DESCRIPTOR" /tmp/release-dex/classes*.dex; then
             echo 'ERROR: development recovery implementation leaked into release Consumer APK'
             exit 1
           fi
-          echo 'PASS: development recovery implementation exists only in debug Consumer output.'
+          echo 'PASS: development recovery implementation exists only in engineering Consumer output.'
 
-      - name: Collect APKs
+      - name: Mark push-built APKs non-distributable
         run: |
-          set -euo pipefail
-          mkdir -p dist
-          HOST_APK="$(find apps/host/app/build/outputs/apk/debug -maxdepth 1 -type f -name '*.apk' | head -n 1)"
-          CONSUMER_APK="$(find apps/consumer/app/build/outputs/apk/debug -maxdepth 1 -type f -name '*.apk' | head -n 1)"
-          test -n "$HOST_APK"
-          test -n "$CONSUMER_APK"
-          cp "$HOST_APK" dist/PhoneLending-Host-v0.4.0-vc2-dev.apk
-          cp "$CONSUMER_APK" dist/PhoneLending-Consumer-v0.4.0-vc2-dev.apk
-          sha256sum dist/*.apk > dist/SHA256SUMS.txt
+          cat <<'EOF'
+          PASS: source compiles and recovery boundary is intact.
+          NOTE: APKs produced in this compile-only job use runner-local debug signing unless external signing is configured.
+          They are intentionally NOT uploaded as distributable artifacts.
+          EOF
 
       - name: Package exact source snapshot
         run: |
           set -euo pipefail
-          mkdir -p source-dist/PhoneLending-Control-v0.4.0-source
+          mkdir -p source-dist/PhoneLending-Control-v0.4.1-source
           rsync -a \
             --exclude '.git/' \
             --exclude '**/build/' \
             --exclude '.gradle/' \
             --exclude 'dist/' \
             --exclude 'source-dist/' \
-            ./ source-dist/PhoneLending-Control-v0.4.0-source/
-          printf '%s\n' '${{ github.sha }}' > source-dist/PhoneLending-Control-v0.4.0-source/SOURCE_COMMIT.txt
-          find source-dist/PhoneLending-Control-v0.4.0-source -type f -print0 | sort -z | xargs -0 sha256sum > source-dist/SOURCE_SHA256SUMS.txt
-
-      - name: Upload APKs
-        uses: actions/upload-artifact@v4
-        with:
-          name: phonelending-v0.4.0-apks
-          path: dist/
-          if-no-files-found: error
+            ./ source-dist/PhoneLending-Control-v0.4.1-source/
+          printf '%s\n' '${{ github.sha }}' > source-dist/PhoneLending-Control-v0.4.1-source/SOURCE_COMMIT.txt
+          find source-dist/PhoneLending-Control-v0.4.1-source -type f -print0 | sort -z | xargs -0 sha256sum > source-dist/SOURCE_SHA256SUMS.txt
 
       - name: Upload source snapshot
         uses: actions/upload-artifact@v4
         with:
-          name: phonelending-v0.4.0-source
+          name: phonelending-v0.4.1-source
           path: source-dist/
           if-no-files-found: error
+
+  signed_distribution:
+    if: github.event_name == 'workflow_dispatch'
+    needs: compile_and_boundary_check
+    runs-on: ubuntu-latest
+    env:
+      PL_CONSUMER_DEV_KEYSTORE_B64: ${{ secrets.PL_CONSUMER_DEV_KEYSTORE_B64 }}
+      PL_CONSUMER_DEV_STORE_PASSWORD: ${{ secrets.PL_CONSUMER_DEV_STORE_PASSWORD }}
+      PL_CONSUMER_DEV_KEY_ALIAS: ${{ secrets.PL_CONSUMER_DEV_KEY_ALIAS }}
+      PL_CONSUMER_DEV_KEY_PASSWORD: ${{ secrets.PL_CONSUMER_DEV_KEY_PASSWORD }}
+      PL_HOST_DEV_KEYSTORE_B64: ${{ secrets.PL_HOST_DEV_KEYSTORE_B64 }}
+      PL_HOST_DEV_STORE_PASSWORD: ${{ secrets.PL_HOST_DEV_STORE_PASSWORD }}
+      PL_HOST_DEV_KEY_ALIAS: ${{ secrets.PL_HOST_DEV_KEY_ALIAS }}
+      PL_HOST_DEV_KEY_PASSWORD: ${{ secrets.PL_HOST_DEV_KEY_PASSWORD }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android 16 SDK
+        run: sdkmanager "platform-tools" "platforms;android-36" "build-tools;36.0.0"
+
+      - name: Set up Gradle 8.13
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.13'
+
+      - name: Require and materialize private signing inputs
+        run: |
+          set -euo pipefail
+          for name in \
+            PL_CONSUMER_DEV_KEYSTORE_B64 PL_CONSUMER_DEV_STORE_PASSWORD PL_CONSUMER_DEV_KEY_ALIAS PL_CONSUMER_DEV_KEY_PASSWORD \
+            PL_HOST_DEV_KEYSTORE_B64 PL_HOST_DEV_STORE_PASSWORD PL_HOST_DEV_KEY_ALIAS PL_HOST_DEV_KEY_PASSWORD; do
+            if [ -z "${!name:-}" ]; then
+              echo "ERROR: required GitHub Actions secret $name is not configured"
+              exit 1
+            fi
+          done
+          printf '%s' "$PL_CONSUMER_DEV_KEYSTORE_B64" | base64 --decode > "$RUNNER_TEMP/phonelending-consumer-dev.p12"
+          printf '%s' "$PL_HOST_DEV_KEYSTORE_B64" | base64 --decode > "$RUNNER_TEMP/phonelending-host-dev.p12"
+          chmod 600 "$RUNNER_TEMP/phonelending-consumer-dev.p12" "$RUNNER_TEMP/phonelending-host-dev.p12"
+          echo "PL_CONSUMER_DEV_KEYSTORE_PATH=$RUNNER_TEMP/phonelending-consumer-dev.p12" >> "$GITHUB_ENV"
+          echo "PL_HOST_DEV_KEYSTORE_PATH=$RUNNER_TEMP/phonelending-host-dev.p12" >> "$GITHUB_ENV"
+
+      - name: Build with stable external development signing
+        run: |
+          gradle --no-daemon \
+            :host:verifyStableDevSigningConfigured \
+            :consumer:verifyStableDevSigningConfigured \
+            :host:assembleDebug \
+            :consumer:assembleDebug
+
+      - name: Verify pinned signing identities
+        run: |
+          set -euo pipefail
+          HOST_APK="$(find apps/host/app/build/outputs/apk/debug -maxdepth 1 -type f -name '*.apk' | head -n 1)"
+          CONSUMER_APK="$(find apps/consumer/app/build/outputs/apk/debug -maxdepth 1 -type f -name '*.apk' | head -n 1)"
+          EXPECTED_HOST="$(tr -d '[:space:]' < signing/HOST_DEV_CERT_SHA256.txt | tr '[:upper:]' '[:lower:]')"
+          EXPECTED_CONSUMER="$(tr -d '[:space:]' < signing/CONSUMER_DEV_CERT_SHA256.txt | tr '[:upper:]' '[:lower:]')"
+          ACTUAL_HOST="$(apksigner verify --print-certs "$HOST_APK" | sed -n 's/^Signer #1 certificate SHA-256 digest: //p' | head -n 1 | tr -d ':' | tr '[:upper:]' '[:lower:]')"
+          ACTUAL_CONSUMER="$(apksigner verify --print-certs "$CONSUMER_APK" | sed -n 's/^Signer #1 certificate SHA-256 digest: //p' | head -n 1 | tr -d ':' | tr '[:upper:]' '[:lower:]')"
+          test "$ACTUAL_HOST" = "$EXPECTED_HOST" || { echo "ERROR: Host signing identity mismatch"; exit 1; }
+          test "$ACTUAL_CONSUMER" = "$EXPECTED_CONSUMER" || { echo "ERROR: Consumer signing identity mismatch"; exit 1; }
+          echo "PASS: Host signer $ACTUAL_HOST"
+          echo "PASS: Consumer signer $ACTUAL_CONSUMER"
+
+      - name: Verify engineering Consumer recovery implementation
+        run: |
+          set -euo pipefail
+          CONSUMER_APK="$(find apps/consumer/app/build/outputs/apk/debug -maxdepth 1 -type f -name '*.apk' | head -n 1)"
+          rm -rf /tmp/consumer-signed-dex && mkdir -p /tmp/consumer-signed-dex
+          unzip -q "$CONSUMER_APK" 'classes*.dex' -d /tmp/consumer-signed-dex
+          grep -a -q 'Lcom/jace/phonelending/consumer/DebugRecoveryHooks;' /tmp/consumer-signed-dex/classes*.dex
+          echo 'PASS: signed engineering Consumer retains development recovery implementation.'
+
+      - name: Collect signed distributable development APKs
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          HOST_APK="$(find apps/host/app/build/outputs/apk/debug -maxdepth 1 -type f -name '*.apk' | head -n 1)"
+          CONSUMER_APK="$(find apps/consumer/app/build/outputs/apk/debug -maxdepth 1 -type f -name '*.apk' | head -n 1)"
+          cp "$HOST_APK" dist/PhoneLending-Host-v0.4.1-vc3-dev.apk
+          cp "$CONSUMER_APK" dist/PhoneLending-Consumer-v0.4.1-vc3-engineering.apk
+          cp signing/HOST_DEV_CERT_SHA256.txt dist/HOST_DEV_CERT_SHA256.txt
+          cp signing/CONSUMER_DEV_CERT_SHA256.txt dist/CONSUMER_DEV_CERT_SHA256.txt
+          sha256sum dist/*.apk > dist/SHA256SUMS.txt
+
+      - name: Upload signed development distribution
+        uses: actions/upload-artifact@v4
+        with:
+          name: phonelending-v0.4.1-signed-development-apks
+          path: dist/
+          if-no-files-found: error
+          retention-days: 30
