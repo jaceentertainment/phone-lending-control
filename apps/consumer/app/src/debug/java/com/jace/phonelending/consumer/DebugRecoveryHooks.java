@@ -24,16 +24,16 @@ public final class DebugRecoveryHooks {
         activity.debugWarning("DEVELOPMENT RECOVERY ENABLED");
         activity.debugLabelValue("Development recovery PIN", pin);
         activity.debugMono(
-                "1. Install with ADB:\n" +
-                "   adb install -t PhoneLending-Consumer-v0.3.0-vc1-dev.apk\n\n" +
-                "2. Set Device Owner:\n" +
-                "   adb shell dpm set-device-owner com.jace.phonelending.consumer.dev/com.jace.phonelending.consumer.AdminReceiver\n\n" +
-                "Out-of-band dev recovery:\n" +
-                "   adb shell dpm remove-active-admin com.jace.phonelending.consumer.dev/com.jace.phonelending.consumer.AdminReceiver");
-        activity.debugBody("Record the device-specific development PIN before kiosk testing. ADB and physical recovery remain independent owner escape paths in Batch 1.");
+                "Install with ADB:\n" +
+                "adb install -t PhoneLending-Consumer-v0.4.0-vc2-dev.apk\n\n" +
+                "Set Device Owner on a clean test phone:\n" +
+                "adb shell dpm set-device-owner com.jace.phonelending.consumer.dev/com.jace.phonelending.consumer.AdminReceiver\n\n" +
+                "Out-of-band development recovery:\n" +
+                "adb shell dpm remove-active-admin com.jace.phonelending.consumer.dev/com.jace.phonelending.consumer.AdminReceiver");
+        activity.debugBody("Record this device-specific development PIN before kiosk testing. ADB and physical recovery remain independent owner escape paths.");
     }
 
-    public static void attachFooter(MainActivity activity, TextView footer) {
+    public static void attachFooter(RestrictedActivity activity, TextView footer) {
         final int[] taps = {0};
         final long[] firstTap = {0L};
         footer.setOnClickListener(v -> {
@@ -51,7 +51,7 @@ public final class DebugRecoveryHooks {
         });
     }
 
-    public static void augmentMaintenance(MainActivity activity) {
+    public static void augmentMaintenance(RestrictedActivity activity) {
         if (activity.sessions().isDevUnrestricted()) {
             activity.debugWarning("DEVELOPMENT UNRESTRICTED TEST LEASE");
             return;
@@ -68,9 +68,20 @@ public final class DebugRecoveryHooks {
                             activity.policy().exitLockTask(activity);
                             activity.policy().applyActiveAndOpenHome();
                         }).show());
+
+        activity.debugButton("RESET HOST PAIRING (DEV)", v ->
+                new AlertDialog.Builder(activity)
+                        .setTitle("Reset Host pairing?")
+                        .setMessage("Development owner action only. The Consumer will forget the current Host and generate a new one-time QR after maintenance ends. Rental time is not changed.")
+                        .setNegativeButton("Cancel", null)
+                        .setPositiveButton("Reset pairing", (d, w) -> {
+                            activity.pairing().resetPairing();
+                            Toast.makeText(activity, "Host trust reset", Toast.LENGTH_SHORT).show();
+                            activity.render();
+                        }).show());
     }
 
-    private static void showGate(MainActivity activity) {
+    private static void showGate(RestrictedActivity activity) {
         long cooldown = cooldownRemaining(activity);
         if (cooldown > 0L) {
             Toast.makeText(activity, "Developer Access cooling down: " + ((cooldown + 999L) / 1000L) + " sec", Toast.LENGTH_LONG).show();
@@ -81,7 +92,7 @@ public final class DebugRecoveryHooks {
         input.setHint("8-digit development PIN");
         new AlertDialog.Builder(activity)
                 .setTitle("Developer Access")
-                .setMessage("Developer Mode is locked. Seven taps only reveal this gate; they never unlock the device.")
+                .setMessage("Seven taps reveal only this authenticated owner gate. They do not unlock the rental phone or change rental time.")
                 .setView(input)
                 .setNegativeButton("Cancel", null)
                 .setPositiveButton("Authenticate", (d, w) -> {
