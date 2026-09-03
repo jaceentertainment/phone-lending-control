@@ -1,6 +1,5 @@
 package com.jace.phonelending.consumer;
 
-import android.app.admin.DevicePolicyManager;
 import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
@@ -16,10 +15,10 @@ public class BootReceiver extends BroadcastReceiver {
                 sessions.exitMaintenance();
             }
             sessions.expireIfNeeded();
-            if (!SessionStore.ACTIVE.equals(sessions.getState())) {
-                policy.applyLockedHome();
-            } else {
+            if (SessionStore.ACTIVE.equals(sessions.getState())) {
                 policy.clearLockedHome();
+            } else {
+                policy.applyRestrictedAndBringToFront();
             }
         }
         ConsumerService.start(context);
