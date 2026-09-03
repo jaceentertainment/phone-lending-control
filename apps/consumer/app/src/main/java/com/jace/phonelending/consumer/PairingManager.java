@@ -23,16 +23,11 @@ public final class PairingManager {
     private final Context context;
     private final SharedPreferences prefs;
     private final SecureRandom random = new SecureRandom();
-    private final ConsumerIdentity identity;
+    private ConsumerIdentity identity;
 
     public PairingManager(Context context) {
         this.context = context.createDeviceProtectedStorageContext();
         this.prefs = this.context.getSharedPreferences("pairing_v2", Context.MODE_PRIVATE);
-        try {
-            this.identity = new ConsumerIdentity();
-        } catch (Exception e) {
-            throw new IllegalStateException("Consumer identity unavailable", e);
-        }
         ensureEnrollmentId();
     }
 
@@ -70,6 +65,11 @@ public final class PairingManager {
         }
     }
 
+    private synchronized ConsumerIdentity identity() throws Exception {
+        if (identity == null) identity = new ConsumerIdentity();
+        return identity;
+    }
+
     public String getDeviceId() { return prefs.getString("deviceId", "PL-UNKNOWN"); }
     public boolean isPaired() { return prefs.getBoolean("paired", false); }
     public String getHostId() { return prefs.getString("hostId", ""); }
@@ -77,17 +77,17 @@ public final class PairingManager {
     public int getAuthorizationRevision() { return prefs.getInt("authRevision", 0); }
 
     public String consumerFingerprint() {
-        try { return identity.fingerprint(); }
+        try { return identity().fingerprint(); }
         catch (Exception e) { return ""; }
     }
 
     public String consumerPublicKeyBase64() {
-        try { return identity.publicKeyBase64(); }
+        try { return identity().publicKeyBase64(); }
         catch (Exception e) { return ""; }
     }
 
-    public String signAsConsumer(String data) throws Exception { return identity.sign(data); }
-    public javax.net.ssl.SSLContext serverSslContext() throws Exception { return identity.serverSslContext(); }
+    public String signAsConsumer(String data) throws Exception { return identity().sign(data); }
+    public javax.net.ssl.SSLContext serverSslContext() throws Exception { return identity().serverSslContext(); }
 
     public synchronized PairingSession getOrCreatePairingSession() {
         if (isPaired()) return null;
@@ -128,7 +128,8 @@ public final class PairingManager {
 
     public synchronized String buildPairingUri(String serviceName, List<String> endpointHints) {
         PairingSession s = getOrCreatePairingSession();
-        if (s == null || serviceName == null || serviceName.isEmpty()) return "";
+        String fingerprint = consumerFingerprint();
+        if (s == null || serviceName == null || serviceName.isEmpty() || fingerprint.isEmpty()) return "";
         Uri.Builder b = new Uri.Builder()
                 .scheme("phonelending")
                 .authority("pair")
@@ -136,7 +137,7 @@ public final class PairingManager {
                 .appendQueryParameter("eid", getDeviceId())
                 .appendQueryParameter("sid", s.id)
                 .appendQueryParameter("tok", s.token)
-                .appendQueryParameter("pkh", consumerFingerprint())
+                .appendQueryParameter("pkh", fingerprint)
                 .appendQueryParameter("svc", serviceName)
                 .appendQueryParameter("ttl", String.valueOf(s.remainingSeconds));
         if (endpointHints != null) {
