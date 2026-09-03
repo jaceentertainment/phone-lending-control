@@ -154,25 +154,34 @@ public final class PairingManager {
             String hostPublicKeyBase64,
             String hostNonce,
             String signatureBase64) {
-        if (isPaired()) return PairResult.fail("already_paired");
         if (protocol != PROTOCOL_VERSION) return PairResult.fail("protocol_mismatch");
-        PairingSession current = getOrCreatePairingSession();
-        if (current == null) return PairResult.fail("pairing_unavailable");
-        if (!constantTime(current.id, sessionId)) return PairResult.fail("pairing_session_mismatch");
-        if (!constantTime(current.token, token)) return PairResult.fail("pairing_token_invalid");
-        if (current.remainingSeconds <= 0L) return PairResult.fail("pairing_token_expired");
         if (hostId == null || hostId.isEmpty() || hostPublicKeyBase64 == null || hostPublicKeyBase64.isEmpty())
             return PairResult.fail("host_identity_missing");
+
         try {
             String canonical = pairCanonical(protocol, sessionId, token, hostId, hostPublicKeyBase64, hostNonce);
             PublicKey hostKey = decodeRsaPublicKey(hostPublicKeyBase64);
             if (!verify(hostKey, canonical, signatureBase64)) return PairResult.fail("host_signature_invalid");
+
+            if (isPaired()) {
+                boolean exactRetry = constantTime(getHostId(), hostId)
+                        && constantTime(getHostPublicKeyBase64(), hostPublicKeyBase64)
+                        && constantTime(prefs.getString("lastPairSessionId", ""), sessionId);
+                return exactRetry ? PairResult.ok(getAuthorizationRevision()) : PairResult.fail("already_paired");
+            }
+
+            PairingSession current = getOrCreatePairingSession();
+            if (current == null) return PairResult.fail("pairing_unavailable");
+            if (!constantTime(current.id, sessionId)) return PairResult.fail("pairing_session_mismatch");
+            if (!constantTime(current.token, token)) return PairResult.fail("pairing_token_invalid");
+            if (current.remainingSeconds <= 0L) return PairResult.fail("pairing_token_expired");
 
             int revision = Math.max(1, prefs.getInt("authRevision", 0) + 1);
             prefs.edit()
                     .putBoolean("paired", true)
                     .putString("hostId", hostId)
                     .putString("hostPublicKey", hostPublicKeyBase64)
+                    .putString("lastPairSessionId", sessionId)
                     .putInt("authRevision", revision)
                     .remove("pairSessionId")
                     .remove("pairToken")
@@ -200,6 +209,7 @@ public final class PairingManager {
                 .remove("hostId")
                 .remove("hostPublicKey")
                 .remove("authRevision")
+                .remove("lastPairSessionId")
                 .remove("pairSessionId")
                 .remove("pairToken")
                 .remove("pairExpiresElapsed")
