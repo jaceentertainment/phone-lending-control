@@ -329,7 +329,7 @@ public class ConsumerService extends Service {
         } catch (Exception ignored) {}
     }
 
-    private synchronized String processLine(String line) {
+    private synchronized String processLine(String line) throws Exception {
         try {
             JSONObject request = new JSONObject(line);
             String type = request.optString("type", "");
