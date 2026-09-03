@@ -1,0 +1,35 @@
+plugins {
+    id 'com.android.application'
+}
+
+android {
+    namespace 'com.jace.phonelending.consumer'
+    compileSdk 36
+
+    defaultConfig {
+        applicationId 'com.jace.phonelending.consumer'
+        minSdk 28
+        targetSdk 36
+        versionCode 1
+        versionName '0.3.0'
+    }
+
+    buildTypes {
+        debug {
+            applicationIdSuffix '.dev'
+            versionNameSuffix '-dev'
+            debuggable true
+            manifestPlaceholders = [testOnlyFlag:'true']
+        }
+        release {
+            minifyEnabled false
+            manifestPlaceholders = [testOnlyFlag:'false']
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+}
