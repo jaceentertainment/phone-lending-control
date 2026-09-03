@@ -1,0 +1,4 @@
+<resources>
+    <string name="app_name">PhoneLending Rental DEV</string>
+    <string name="admin_description">Controls this business-owned development rental device during time-limited sessions.</string>
+</resources>
