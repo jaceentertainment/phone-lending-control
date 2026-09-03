@@ -35,9 +35,14 @@ jobs:
 
       - name: Collect APKs
         run: |
+          set -euo pipefail
           mkdir -p dist
-          cp apps/host/app/build/outputs/apk/debug/app-debug.apk dist/PhoneLending-Host-v0.3.0-vc1-dev.apk
-          cp apps/consumer/app/build/outputs/apk/debug/app-debug.apk dist/PhoneLending-Consumer-v0.3.0-vc1-dev.apk
+          HOST_APK="$(find apps/host/app/build/outputs/apk/debug -maxdepth 1 -type f -name '*.apk' | head -n 1)"
+          CONSUMER_APK="$(find apps/consumer/app/build/outputs/apk/debug -maxdepth 1 -type f -name '*.apk' | head -n 1)"
+          test -n "$HOST_APK"
+          test -n "$CONSUMER_APK"
+          cp "$HOST_APK" dist/PhoneLending-Host-v0.3.0-vc1-dev.apk
+          cp "$CONSUMER_APK" dist/PhoneLending-Consumer-v0.3.0-vc1-dev.apk
           sha256sum dist/*.apk > dist/SHA256SUMS.txt
 
       - name: Upload APKs
