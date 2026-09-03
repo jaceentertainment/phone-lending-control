@@ -1,9 +1,9 @@
-name: PhoneLending v0.4.2 Field Provisioning Build
+name: PhoneLending v0.4.3 Provisioning Recovery Gate Build
 
 on:
   push:
     branches:
-      - batch2-v0.4.2-field-provisioning
+      - batch2-v0.4.3-provisioning-gate
   workflow_dispatch:
 
 jobs:
@@ -47,11 +47,23 @@ jobs:
           CLASS_DESCRIPTOR='Lcom/jace/phonelending/consumer/DebugRecoveryHooks;'
           grep -a -q "$CLASS_DESCRIPTOR" /tmp/pl-eng/classes*.dex || { echo 'ERROR: engineering recovery hook missing'; exit 1; }
           grep -a -q "$CLASS_DESCRIPTOR" /tmp/pl-field/classes*.dex || { echo 'ERROR: field recovery hook missing'; exit 1; }
+          grep -a -q 'showProvisioningRecoveryGate' /tmp/pl-field/classes*.dex || { echo 'ERROR: field provisioning recovery gate missing'; exit 1; }
           if grep -a -q "$CLASS_DESCRIPTOR" /tmp/pl-release/classes*.dex; then
             echo 'ERROR: test recovery implementation leaked into release boundary'
             exit 1
           fi
-          echo 'PASS: engineering and field recovery hooks present; release boundary clean.'
+          echo 'PASS: engineering/field recovery hooks present, field provisioning gate present, release boundary clean.'
+
+      - name: Verify platform provisioning contract
+        run: |
+          set -euo pipefail
+          if grep -q 'EXTRA_PROVISIONING_SKIP_EDUCATION_SCREENS' apps/consumer/app/src/main/java/com/jace/phonelending/consumer/GetProvisioningModeActivity.java; then
+            echo 'ERROR: field provisioning must not suppress Android education screens'
+            exit 1
+          fi
+          grep -q 'EXTRA_PROVISIONING_ALLOWED_PROVISIONING_MODES' apps/consumer/app/src/main/java/com/jace/phonelending/consumer/GetProvisioningModeActivity.java || { echo 'ERROR: allowed provisioning modes are not checked'; exit 1; }
+          grep -q 'showProvisioningRecoveryGate' apps/consumer/app/src/fieldTest/java/com/jace/phonelending/consumer/DebugRecoveryHooks.java || { echo 'ERROR: post-reset recovery PIN gate missing'; exit 1; }
+          echo 'PASS: admin-integrated provisioning and post-reset recovery gate source contract present.'
 
       - name: Verify compile APKs are unsigned
         run: |
@@ -67,7 +79,7 @@ jobs:
           done
           echo 'PASS: compile-only Host, engineering Consumer, and field Consumer APKs are unsigned.'
 
-      - name: Verify field manifest is normal-install and package-isolated
+      - name: Verify field manifest is normal-install, package-isolated, and provisioning-capable
         run: |
           set -euo pipefail
           AAPT2="$ANDROID_HOME/build-tools/36.0.0/aapt2"
@@ -80,7 +92,10 @@ jobs:
             echo 'ERROR: field APK is marked testOnly=true'
             exit 1
           fi
-          echo 'PASS: field Consumer has isolated package identity and testOnly=false.'
+          echo "$MANIFEST" | grep -q 'com.jace.phonelending.consumer.AdminReceiver' || { echo 'ERROR: AdminReceiver missing from field manifest'; exit 1; }
+          echo "$MANIFEST" | grep -q 'android.app.action.GET_PROVISIONING_MODE' || { echo 'ERROR: GET_PROVISIONING_MODE handler missing'; exit 1; }
+          echo "$MANIFEST" | grep -q 'android.app.action.ADMIN_POLICY_COMPLIANCE' || { echo 'ERROR: ADMIN_POLICY_COMPLIANCE handler missing'; exit 1; }
+          echo 'PASS: field Consumer is normal-install, isolated, and admin-integrated provisioning capable.'
 
       - name: Collect unsigned artifacts and signer
         run: |
@@ -90,12 +105,12 @@ jobs:
           ENG_APK="$(find apps/consumer/app/build/outputs/apk/debug -maxdepth 1 -type f -name '*.apk' | head -n 1)"
           FIELD_APK="$(find apps/consumer/app/build/outputs/apk/fieldTest -maxdepth 1 -type f -name '*.apk' | head -n 1)"
           cp "$HOST_APK" unsigned-dist/PhoneLending-Host-v0.4.1-vc3-UNSIGNED.apk
-          cp "$ENG_APK" unsigned-dist/PhoneLending-Consumer-v0.4.2-vc4-engineering-UNSIGNED.apk
-          cp "$FIELD_APK" unsigned-dist/PhoneLending-Consumer-v0.4.2-vc4-field-UNSIGNED.apk
+          cp "$ENG_APK" unsigned-dist/PhoneLending-Consumer-v0.4.3-vc5-engineering-UNSIGNED.apk
+          cp "$FIELD_APK" unsigned-dist/PhoneLending-Consumer-v0.4.3-vc5-field-UNSIGNED.apk
           cat > unsigned-dist/NON_DISTRIBUTABLE.txt <<'EOF'
           THESE APKs ARE UNSIGNED COMPILE ARTIFACTS.
           They are not PhoneLending distributions until signed by the pinned external development identities and independently verified.
-          Host remains v0.4.1/vc3 in this Consumer-only field-provisioning change; do not relabel it v0.4.2.
+          Host remains v0.4.1/vc3 in this Consumer-only provisioning recovery-gate change; do not relabel it v0.4.3.
           EOF
           sha256sum unsigned-dist/*.apk > unsigned-dist/SHA256SUMS.txt
           cp "$ANDROID_HOME/build-tools/36.0.0/lib/apksigner.jar" signing-tool/apksigner-36.0.0.jar
@@ -103,7 +118,7 @@ jobs:
       - name: Upload unsigned compile artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: phonelending-v0.4.2-UNSIGNED-NON-DISTRIBUTABLE
+          name: phonelending-v0.4.3-UNSIGNED-NON-DISTRIBUTABLE
           path: unsigned-dist/
           if-no-files-found: error
           retention-days: 14
@@ -119,7 +134,7 @@ jobs:
       - name: Package exact source snapshot
         run: |
           set -euo pipefail
-          mkdir -p source-dist/PhoneLending-Control-v0.4.2-source
+          mkdir -p source-dist/PhoneLending-Control-v0.4.3-source
           rsync -a \
             --exclude '.git/' \
             --exclude '**/build/' \
@@ -127,13 +142,13 @@ jobs:
             --exclude 'source-dist/' \
             --exclude 'unsigned-dist/' \
             --exclude 'signing-tool/' \
-            ./ source-dist/PhoneLending-Control-v0.4.2-source/
-          printf '%s\n' '${{ github.sha }}' > source-dist/PhoneLending-Control-v0.4.2-source/SOURCE_COMMIT.txt
-          find source-dist/PhoneLending-Control-v0.4.2-source -type f -print0 | sort -z | xargs -0 sha256sum > source-dist/SOURCE_SHA256SUMS.txt
+            ./ source-dist/PhoneLending-Control-v0.4.3-source/
+          printf '%s\n' '${{ github.sha }}' > source-dist/PhoneLending-Control-v0.4.3-source/SOURCE_COMMIT.txt
+          find source-dist/PhoneLending-Control-v0.4.3-source -type f -print0 | sort -z | xargs -0 sha256sum > source-dist/SOURCE_SHA256SUMS.txt
 
       - name: Upload source snapshot
         uses: actions/upload-artifact@v4
         with:
-          name: phonelending-v0.4.2-source
+          name: phonelending-v0.4.3-source
           path: source-dist/
           if-no-files-found: error
