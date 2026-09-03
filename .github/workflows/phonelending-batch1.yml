@@ -70,14 +70,17 @@ jobs:
       - name: Verify field manifest is normal-install and package-isolated
         run: |
           set -euo pipefail
+          AAPT2="$ANDROID_HOME/build-tools/36.0.0/aapt2"
           FIELD_APK="$(find apps/consumer/app/build/outputs/apk/fieldTest -maxdepth 1 -type f -name '*.apk' | head -n 1)"
-          BADGING="$(aapt dump badging "$FIELD_APK")"
-          echo "$BADGING" | grep -q "package: name='com.jace.phonelending.consumer.field'" || { echo 'ERROR: field package identity mismatch'; exit 1; }
-          if echo "$BADGING" | grep -qi 'testOnly'; then
-            echo 'ERROR: field APK is still marked testOnly'
+          PACKAGE="$($AAPT2 dump packagename "$FIELD_APK")"
+          test "$PACKAGE" = 'com.jace.phonelending.consumer.field' || { echo "ERROR: field package identity mismatch: $PACKAGE"; exit 1; }
+          MANIFEST="$($AAPT2 dump xmltree "$FIELD_APK" --file AndroidManifest.xml)"
+          echo "$MANIFEST" | grep -q 'android:testOnly' || { echo 'ERROR: testOnly attribute missing from field manifest boundary'; exit 1; }
+          if echo "$MANIFEST" | grep 'android:testOnly' | grep -qE '0xffffffff|true'; then
+            echo 'ERROR: field APK is marked testOnly=true'
             exit 1
           fi
-          echo 'PASS: field Consumer has isolated package identity and is not testOnly.'
+          echo 'PASS: field Consumer has isolated package identity and testOnly=false.'
 
       - name: Collect unsigned artifacts and signer
         run: |
