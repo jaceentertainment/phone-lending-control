@@ -1,9 +1,9 @@
-name: PhoneLending Batch 1 Build
+name: PhoneLending v0.4 QR Pairing Build
 
 on:
   push:
     branches:
-      - batch1-v0.3.0
+      - batch2-v0.4.0
   workflow_dispatch:
 
 jobs:
@@ -30,10 +30,10 @@ jobs:
         with:
           gradle-version: '8.13'
 
-      - name: Build debug APKs and release-boundary check APK
+      - name: Build Host, Consumer debug, and Consumer release-boundary APK
         run: gradle --no-daemon :host:assembleDebug :consumer:assembleDebug :consumer:assembleRelease
 
-      - name: Verify debug recovery compile-time boundary
+      - name: Verify development recovery compile-time boundary
         run: |
           set -euo pipefail
           DEBUG_APK="$(find apps/consumer/app/build/outputs/apk/debug -maxdepth 1 -type f -name '*.apk' | head -n 1)"
@@ -53,7 +53,7 @@ jobs:
             echo 'ERROR: development recovery implementation leaked into release Consumer APK'
             exit 1
           fi
-          echo 'PASS: debug recovery implementation exists only in debug Consumer output.'
+          echo 'PASS: development recovery implementation exists only in debug Consumer output.'
 
       - name: Collect APKs
         run: |
@@ -63,13 +63,13 @@ jobs:
           CONSUMER_APK="$(find apps/consumer/app/build/outputs/apk/debug -maxdepth 1 -type f -name '*.apk' | head -n 1)"
           test -n "$HOST_APK"
           test -n "$CONSUMER_APK"
-          cp "$HOST_APK" dist/PhoneLending-Host-v0.3.0-vc1-dev.apk
-          cp "$CONSUMER_APK" dist/PhoneLending-Consumer-v0.3.0-vc1-dev.apk
+          cp "$HOST_APK" dist/PhoneLending-Host-v0.4.0-vc2-dev.apk
+          cp "$CONSUMER_APK" dist/PhoneLending-Consumer-v0.4.0-vc2-dev.apk
           sha256sum dist/*.apk > dist/SHA256SUMS.txt
 
       - name: Upload APKs
         uses: actions/upload-artifact@v4
         with:
-          name: phonelending-batch1-apks
+          name: phonelending-v0.4.0-apks
           path: dist/
           if-no-files-found: error
