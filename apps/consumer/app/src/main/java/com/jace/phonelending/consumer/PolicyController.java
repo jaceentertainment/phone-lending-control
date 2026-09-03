@@ -52,7 +52,7 @@ public final class PolicyController {
             IntentFilter filter = new IntentFilter(Intent.ACTION_MAIN);
             filter.addCategory(Intent.CATEGORY_HOME);
             filter.addCategory(Intent.CATEGORY_DEFAULT);
-            ComponentName activity = new ComponentName(context, MainActivity.class);
+            ComponentName activity = new ComponentName(context, RestrictedActivity.class);
             dpm.addPersistentPreferredActivity(admin, filter, activity);
         } catch (Throwable ignored) {}
     }
@@ -80,7 +80,7 @@ public final class PolicyController {
         if (!isDeviceOwner()) return;
         applyLockedHome();
         try {
-            Intent i = new Intent(context, MainActivity.class);
+            Intent i = new Intent(context, RestrictedActivity.class);
             i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_SINGLE_TOP);
             context.startActivity(i);
         } catch (Throwable ignored) {}
