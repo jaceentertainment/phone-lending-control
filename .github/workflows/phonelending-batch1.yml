@@ -67,9 +67,30 @@ jobs:
           cp "$CONSUMER_APK" dist/PhoneLending-Consumer-v0.4.0-vc2-dev.apk
           sha256sum dist/*.apk > dist/SHA256SUMS.txt
 
+      - name: Package exact source snapshot
+        run: |
+          set -euo pipefail
+          mkdir -p source-dist/PhoneLending-Control-v0.4.0-source
+          rsync -a \
+            --exclude '.git/' \
+            --exclude '**/build/' \
+            --exclude '.gradle/' \
+            --exclude 'dist/' \
+            --exclude 'source-dist/' \
+            ./ source-dist/PhoneLending-Control-v0.4.0-source/
+          printf '%s\n' '${{ github.sha }}' > source-dist/PhoneLending-Control-v0.4.0-source/SOURCE_COMMIT.txt
+          find source-dist/PhoneLending-Control-v0.4.0-source -type f -print0 | sort -z | xargs -0 sha256sum > source-dist/SOURCE_SHA256SUMS.txt
+
       - name: Upload APKs
         uses: actions/upload-artifact@v4
         with:
           name: phonelending-v0.4.0-apks
           path: dist/
+          if-no-files-found: error
+
+      - name: Upload source snapshot
+        uses: actions/upload-artifact@v4
+        with:
+          name: phonelending-v0.4.0-source
+          path: source-dist/
           if-no-files-found: error
