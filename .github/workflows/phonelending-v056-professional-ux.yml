@@ -1,0 +1,59 @@
+name: PhoneLending v0.5.6 Professional UX Build
+
+on:
+  push:
+    branches:
+      - batch6-v0.5.6-professional-ux
+  workflow_dispatch:
+
+jobs:
+  compile_and_validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Reconstruct and apply validated source chain
+        run: bash tools/reconstruct-v056.sh
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v3
+      - run: sdkmanager "platform-tools" "platforms;android-36" "build-tools;36.0.0"
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.13'
+
+      - name: Compile Host and Rental
+        run: gradle --no-daemon :host:assembleDebug :consumer:assembleFieldTest
+
+      - name: Validate v0.5.6 professional UX and authority boundaries
+        run: bash tools/validate-v056.sh
+
+      - name: Verify compile artifacts unsigned
+        run: |
+          set -euo pipefail
+          for apk in $(find apps/host/app/build/outputs/apk/debug apps/consumer/app/build/outputs/apk/fieldTest -type f -name '*.apk'); do
+            if apksigner verify "$apk" >/dev/null 2>&1; then echo "unexpected signed APK: $apk"; exit 1; fi
+          done
+
+      - name: Collect artifacts
+        run: |
+          mkdir -p unsigned-dist source-dist/PhoneLending-Control-v0.5.6-source
+          cp $(find apps/host/app/build/outputs/apk/debug -type f -name '*.apk' | head -n 1) unsigned-dist/PhoneLending-Host-v0.5.6-vc10-UNSIGNED.apk
+          cp $(find apps/consumer/app/build/outputs/apk/fieldTest -type f -name '*.apk' | head -n 1) unsigned-dist/PhoneLending-Rental-v0.5.6-vc12-field-UNSIGNED.apk
+          sha256sum unsigned-dist/*.apk > unsigned-dist/SHA256SUMS.txt
+          rsync -a --exclude '.git/' --exclude '**/build/' --exclude '.gradle/' --exclude 'source-dist/' --exclude 'unsigned-dist/' ./ source-dist/PhoneLending-Control-v0.5.6-source/
+          printf '%s\n' '${{ github.sha }}' > source-dist/PhoneLending-Control-v0.5.6-source/SOURCE_BRANCH_COMMIT.txt
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: phonelending-v0.5.6-professional-ux-unsigned
+          path: unsigned-dist/
+          retention-days: 14
+      - uses: actions/upload-artifact@v4
+        with:
+          name: phonelending-v0.5.6-professional-ux-source
+          path: source-dist/
+          retention-days: 14
