@@ -16,8 +16,8 @@ android {
         applicationId 'com.jace.phonelending.consumer'
         minSdk 28
         targetSdk 36
-        versionCode 4
-        versionName '0.4.2'
+        versionCode 6
+        versionName '0.5.0'
     }
 
     signingConfigs {
@@ -39,8 +39,6 @@ android {
             versionNameSuffix '-engineering'
             debuggable true
             manifestPlaceholders = [testOnlyFlag:'true']
-            // Recovery-qualified engineering lane. Never silently use Gradle's
-            // machine-local debug keystore.
             signingConfig stableDevSigningConfigured ? signingConfigs.consumerDev : null
         }
         fieldTest {
@@ -48,8 +46,6 @@ android {
             versionNameSuffix '-field'
             debuggable true
             manifestPlaceholders = [testOnlyFlag:'false']
-            // Normal Package Installer is allowed for this lane. It remains a
-            // non-production test build and uses the pinned Consumer DEV signer.
             signingConfig stableDevSigningConfigured ? signingConfigs.consumerDev : null
         }
         release {
