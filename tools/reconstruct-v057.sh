@@ -29,4 +29,8 @@ printf '%s  %s\n' '2544b5ad9a229ec6d3368ce1b31b8cd45bb49abd57fda7c35b4bfbda8de2a
 git apply --check /tmp/v057.patch
 git apply /tmp/v057.patch
 
+printf '%s  %s\n' 'e7d26b0726ca8e281f4667e26915200c2007c2c99a7478ddc32b613b805c642f' 'tools/v0.5.7-custom-duration-migration-fix.patch' | sha256sum -c -
+git apply --check tools/v0.5.7-custom-duration-migration-fix.patch
+git apply tools/v0.5.7-custom-duration-migration-fix.patch
+
 diff -qr /tmp/v057-consumer-before apps/consumer
