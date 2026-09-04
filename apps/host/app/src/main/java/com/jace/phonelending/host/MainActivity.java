@@ -39,6 +39,7 @@ public class MainActivity extends Activity {
     private LinearLayout root;
     private String screenMode = "lock";
     private DeviceRecord currentDevice = null;
+    private long selectedDurationSeconds = 3600L;
 
     @Override protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
@@ -107,7 +108,7 @@ public class MainActivity extends Activity {
         currentDevice = null;
         page();
         title("PhoneLending Host");
-        warning("DEVELOPMENT FLEET ONLY");
+        warning("DEVELOPMENT BUILD");
 
         int active = 0, ready = 0, expired = 0, attention = 0, repair = 0;
         for (DeviceRecord d : devices) {
@@ -120,11 +121,10 @@ public class MainActivity extends Activity {
         body(devices.size() + " devices   |   " + active + " active   |   " + ready + " ready   |   "
                 + expired + " expired   |   " + attention + " attention" + (repair > 0 ? "   |   " + repair + " re-pair" : ""));
 
-        button("ADD RENTAL DEVICE — SCAN QR", v -> launchQrScanner());
+        button("+ ADD RENTAL DEVICE", v -> launchQrScanner());
         button("REFRESH ALL", v -> refreshAll());
         for (DeviceRecord d : devices) renderCard(d);
-        if (devices.isEmpty()) body("No rental devices paired yet. Provision a Consumer as Device Owner, then scan the QR shown on that rental phone.");
-        button("ADVANCED / TROUBLESHOOTING", v -> showAdvancedPairing());
+        if (devices.isEmpty()) body("No Rental phones paired yet. Open PhoneLending Rental on a phone and scan its pairing QR.");
         button("LOCK HOST", v -> showUnlock());
         if (refreshNow) refreshAll();
     }
@@ -135,10 +135,9 @@ public class MainActivity extends Activity {
             warning("RE-PAIR REQUIRED");
             body("This is a legacy Batch-1 record and is not trusted by QR protocol v2.");
         } else {
-            labelValue("Status", d.state);
-            labelValue("Remaining", displayTimer(d));
-            labelValue("Last confirmed", d.lastSyncEpoch == 0 ? "never" : ageText(d.lastSyncEpoch));
-            labelValue("Connection", d.ip.isEmpty() ? "discover on demand" : d.ip + ":" + d.port + " (last known)");
+            labelValue("Status", friendlyState(d));
+            if ("ACTIVE".equals(d.state)) labelValue("Remaining", displayTimer(d));
+            labelValue("Last seen", d.lastSyncEpoch == 0 ? "never" : ageText(d.lastSyncEpoch));
         }
         button("OPEN DEVICE", v -> showDevice(d));
     }
@@ -153,48 +152,47 @@ public class MainActivity extends Activity {
 
         if (!d.isV2Trusted()) {
             warning("RE-PAIR REQUIRED");
-            body("This record came from the older manual pairing system. For safety it cannot send v0.4 management commands.");
+            body("This older local record cannot send current management commands. Pair the Rental phone again using its QR.");
             button("FORGET LOCAL RECORD", v -> forgetDevice(d));
-            button("BACK TO DASHBOARD", v -> showDashboard(false));
+            button("BACK TO DEVICES", v -> showDashboard(false));
             return;
         }
 
-        labelValue("State", d.state);
-        labelValue("Remaining", displayTimer(d));
-        labelValue("Last confirmed", d.lastSyncEpoch == 0 ? "never" : ageText(d.lastSyncEpoch));
-        labelValue("Protocol", "v" + d.protocolVersion);
-        labelValue("Service", d.serviceName);
-        labelValue("Endpoint", d.ip.isEmpty() ? "discover on demand" : d.ip + ":" + d.port + " (last known)");
-        if (!d.lastMessage.isEmpty()) labelValue("Last result", d.lastMessage);
+        labelValue("Status", friendlyState(d));
+        if ("ACTIVE".equals(d.state)) labelValue("Remaining", displayTimer(d));
+        labelValue("Last seen", d.lastSyncEpoch == 0 ? "never" : ageText(d.lastSyncEpoch));
+        if (!d.lastMessage.isEmpty() && (d.lastMessage.startsWith("REJECTED") || d.lastMessage.startsWith("OUTCOME UNKNOWN")))
+            labelValue("Last result", d.lastMessage);
 
         button("REFRESH STATUS", v -> request(d, "STATUS", "", "Refreshing status..."));
 
         if ("AVAILABLE_LOCKED".equals(d.state)) {
-            section("START TEST RENTAL");
-            if (supports(d, "start")) {
-                button("15 MINUTES", v -> request(d, "START", "900", "Starting rental..."));
-                button("30 MINUTES", v -> request(d, "START", "1800", "Starting rental..."));
-                button("1 HOUR", v -> request(d, "START", "3600", "Starting rental..."));
-                button("CUSTOM DURATION", v -> customStart(d));
-            } else body("START is not supported by this Consumer version.");
+            section("RENTAL DURATION");
+            labelValue("Selected", durationLabel(selectedDurationSeconds));
+            button("15 MIN", v -> { selectedDurationSeconds = 900L; showDevice(d); });
+            button("30 MIN", v -> { selectedDurationSeconds = 1800L; showDevice(d); });
+            button("1 HOUR", v -> { selectedDurationSeconds = 3600L; showDevice(d); });
+            button("CUSTOM", v -> customSelectDuration(d));
+            if (supports(d, "start")) button("START RENTAL", v -> confirmStart(d, selectedDurationSeconds));
         } else if ("ACTIVE".equals(d.state)) {
-            section("ACTIVE RENTAL");
+            section("RENTAL ACTIVE");
             if (supports(d, "extend")) {
-                button("EXTEND +15 MIN", v -> request(d, "EXTEND", "900", "Requesting extension..."));
-                button("EXTEND +30 MIN", v -> request(d, "EXTEND", "1800", "Requesting extension..."));
+                button("+15 MIN", v -> request(d, "EXTEND", "900", "Requesting extension..."));
+                button("+30 MIN", v -> request(d, "EXTEND", "1800", "Requesting extension..."));
+                button("+1 HOUR", v -> request(d, "EXTEND", "3600", "Requesting extension..."));
             }
-            if (supports(d, "end")) button("END & LOCK NOW", v -> confirmEnd(d));
+            if (supports(d, "end")) button("END RENTAL", v -> confirmEnd(d));
         } else if ("EXPIRED_LOCKED".equals(d.state)) {
-            body("This development build does not claim renter-data turnover is production-complete. PREPARE only resets the test-session state.");
-            if (supports(d, "prepare")) button("PREPARE TEST DEVICE", v -> request(d, "PREPARE", "", "Preparing test state..."));
-            if (supports(d, "maintenance")) button("OWNER MAINTENANCE", v -> request(d, "MAINTENANCE", "", "Requesting maintenance..."));
+            section("RENTAL ENDED");
+            if (supports(d, "prepare")) button("PREPARE NEXT RENTAL", v -> request(d, "PREPARE", "", "Preparing next rental..."));
+            if (supports(d, "relock")) button("RELOCK PHONE", v -> request(d, "RELOCK", "", "Reapplying development lock..."));
         } else if ("RECOVERY_LOCKED".equals(d.state)) {
-            warning("OWNER ATTENTION REQUIRED");
-            if (supports(d, "maintenance")) button("OWNER MAINTENANCE", v -> request(d, "MAINTENANCE", "", "Requesting recovery maintenance..."));
+            warning("NEEDS ATTENTION");
+            if (supports(d, "relock")) button("RELOCK PHONE", v -> request(d, "RELOCK", "", "Reapplying development lock..."));
         } else if ("ADMIN_MAINTENANCE".equals(d.state)) {
-            if (supports(d, "relock")) button("END MAINTENANCE / RELOCK", v -> request(d, "RELOCK", "", "Relocking..."));
+            warning("NEEDS ATTENTION");
         }
-        button("BACK TO DASHBOARD", v -> showDashboard(false));
+        button("BACK TO DEVICES", v -> showDashboard(false));
     }
 
     private void launchQrScanner() {
@@ -230,8 +228,8 @@ public class MainActivity extends Activity {
         page();
         title("Pairing Rental Device");
         section(payload.deviceId);
-        body("Finding the rental phone, verifying its cryptographic identity, and waiting for the Consumer to acknowledge Host trust...");
-        labelValue("Status", "PAIRING / PENDING CONSUMER ACK");
+        body("Finding the Rental phone and waiting for it to confirm pairing...");
+        labelValue("Status", "PAIRING");
 
         io.execute(() -> {
             ConsumerClient.PairResult result = client.pair(this, prefs.getHostId(), payload, payload.deviceId);
@@ -245,7 +243,7 @@ public class MainActivity extends Activity {
                     new AlertDialog.Builder(this)
                             .setTitle("Pairing failed")
                             .setMessage("Stage: " + result.stage + "\n\n" + result.error
-                                    + "\n\nMake sure both phones are on the same local network and the Consumer QR is still current.")
+                                    + "\n\nMake sure both phones are on the same local network and the Rental QR is still current.")
                             .setPositiveButton("BACK", (d, w) -> showDashboard(false))
                             .show();
                 }
@@ -258,7 +256,7 @@ public class MainActivity extends Activity {
         alias.setText(device.deviceId);
         new AlertDialog.Builder(this)
                 .setTitle("Device paired")
-                .setMessage("Consumer identity and acknowledgement verified. Give this rental phone a friendly name.")
+                .setMessage("Rental phone verified. Give it a friendly name.")
                 .setView(alias)
                 .setCancelable(false)
                 .setPositiveButton("SAVE", (d, w) -> {
@@ -295,27 +293,37 @@ public class MainActivity extends Activity {
         return new PairingPayload.Endpoint(raw.substring(0, split).trim(), port);
     }
 
-    private void customStart(DeviceRecord d) {
+    private void customSelectDuration(DeviceRecord d) {
         EditText minutes = dialogInput("Minutes (1-1440)", true);
         new AlertDialog.Builder(this)
-                .setTitle("Custom test rental")
+                .setTitle("Custom duration")
                 .setView(minutes)
                 .setNegativeButton("Cancel", null)
-                .setPositiveButton("Start", (x, y) -> {
+                .setPositiveButton("SET", (x, y) -> {
                     try {
                         long m = Long.parseLong(minutes.getText().toString().trim());
                         if (m < 1 || m > 1440) throw new NumberFormatException();
-                        request(d, "START", String.valueOf(m * 60L), "Starting rental...");
+                        selectedDurationSeconds = m * 60L;
+                        showDevice(d);
                     } catch (Exception e) { Toast.makeText(this, "Enter 1-1440 minutes", Toast.LENGTH_SHORT).show(); }
                 }).show();
     }
 
+    private void confirmStart(DeviceRecord d, long seconds) {
+        new AlertDialog.Builder(this)
+                .setTitle("Start " + durationLabel(seconds) + " rental?")
+                .setMessage(d.deviceId)
+                .setNegativeButton("CANCEL", null)
+                .setPositiveButton("START", (x, y) -> request(d, "START", String.valueOf(seconds), "Starting rental..."))
+                .show();
+    }
+
     private void confirmEnd(DeviceRecord d) {
         new AlertDialog.Builder(this)
-                .setTitle("End and lock rental now?")
-                .setMessage("The Host will request immediate expiration. Success will only be shown after the Consumer signs and acknowledges the resulting state.")
+                .setTitle("End this rental now?")
+                .setMessage("The Rental phone will end the session and return to its development lock. Success appears only after the Rental phone confirms it.")
                 .setNegativeButton("Cancel", null)
-                .setPositiveButton("END & LOCK", (x, y) -> request(d, "END", "", "Ending and locking..."))
+                .setPositiveButton("END RENTAL", (x, y) -> request(d, "END", "", "Ending and locking..."))
                 .show();
     }
 
@@ -334,11 +342,11 @@ public class MainActivity extends Activity {
                     d.lastSyncEpoch = System.currentTimeMillis();
                     if (!r.ip.isEmpty()) { d.ip = r.ip; d.port = r.port; }
                     d.lastMessage = (r.accepted ? "ACK " : "REJECTED ") + command + ": " + r.message;
-                    Toast.makeText(this, r.accepted ? "Consumer acknowledged: " + r.state : "Consumer rejected: " + r.message,
+                    Toast.makeText(this, r.accepted ? "Rental acknowledged: " + r.state : "Rental rejected: " + r.message,
                             r.accepted ? Toast.LENGTH_SHORT : Toast.LENGTH_LONG).show();
                 } else {
                     d.lastMessage = "OUTCOME UNKNOWN / OFFLINE: " + r.message;
-                    Toast.makeText(this, "Consumer unreachable. Command outcome is unknown; authoritative state will be reconciled on reconnect.", Toast.LENGTH_LONG).show();
+                    Toast.makeText(this, "Rental phone unreachable. Command outcome is unknown; state will be checked again on reconnect.", Toast.LENGTH_LONG).show();
                 }
                 prefs.saveDevices(devices);
                 showDevice(d);
@@ -377,7 +385,7 @@ public class MainActivity extends Activity {
     private void forgetDevice(DeviceRecord d) {
         new AlertDialog.Builder(this)
                 .setTitle("Forget local record?")
-                .setMessage("This only removes the record from this Host. It does not remotely change Consumer trust or rental state.")
+                .setMessage("This only removes the record from this Host. It does not change the Rental phone itself.")
                 .setNegativeButton("Cancel", null)
                 .setPositiveButton("FORGET", (x, y) -> {
                     devices.remove(d);
@@ -389,6 +397,23 @@ public class MainActivity extends Activity {
     private void removeRecordWithId(String deviceId) {
         Iterator<DeviceRecord> it = devices.iterator();
         while (it.hasNext()) if (deviceId.equals(it.next().deviceId)) it.remove();
+    }
+
+    private String friendlyState(DeviceRecord d) {
+        if (d.lastMessage != null && (d.lastMessage.startsWith("offline") || d.lastMessage.startsWith("OUTCOME UNKNOWN"))) return "OFFLINE";
+        if ("AVAILABLE_LOCKED".equals(d.state)) return "READY";
+        if ("ACTIVE".equals(d.state)) return "ACTIVE";
+        if ("EXPIRED_LOCKED".equals(d.state)) return "EXPIRED";
+        if ("RECOVERY_LOCKED".equals(d.state) || "ADMIN_MAINTENANCE".equals(d.state)) return "NEEDS ATTENTION";
+        return "PAIRING";
+    }
+
+    private String durationLabel(long seconds) {
+        if (seconds == 900L) return "15 minutes";
+        if (seconds == 1800L) return "30 minutes";
+        if (seconds == 3600L) return "1 hour";
+        long minutes = Math.max(1L, seconds / 60L);
+        return minutes + " minutes";
     }
 
     private String displayTimer(DeviceRecord d) {
