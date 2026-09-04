@@ -1,0 +1,159 @@
+name: PhoneLending v0.5.2 Professional UI Build
+
+on:
+  push:
+    branches:
+      - batch2-v0.5.2-professional-ui
+  workflow_dispatch:
+
+jobs:
+  compile_and_validate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Reconstruct and verify v0.5.2 presentation patch
+        run: |
+          set -euo pipefail
+          cat \
+            tools/v0.5.2-professional-ui.patch.gz.b64.part-00 \
+            tools/v0.5.2-professional-ui.patch.gz.b64.part-01 \
+            tools/v0.5.2-professional-ui.patch.gz.b64.part-02 \
+            tools/v0.5.2-professional-ui.patch.gz.b64.part-03 \
+            tools/v0.5.2-professional-ui.patch.gz.b64.part-04 \
+            tools/v0.5.2-professional-ui.patch.gz.b64.part-05 \
+            > /tmp/v052.patch.gz.b64
+          echo '025bee9ee89255810ff313b25c6f7e64649727b73336e757b3023a03f18989ae  /tmp/v052.patch.gz.b64' | sha256sum -c -
+          base64 -d /tmp/v052.patch.gz.b64 | gzip -d > /tmp/v052.patch
+          echo 'baa3b11b1af7e00f43540b0c1975f90e9a6f6f320984da72ec7a5022dbf5573c  /tmp/v052.patch' | sha256sum -c -
+
+      - name: Apply validated Stage-A patches in order
+        run: |
+          set -euo pipefail
+          base64 -d tools/v0.5.1-guided-onboarding.patch.gz.b64 | gzip -d > /tmp/v051.patch
+          git apply --check tools/v0.5.0-consumer-service.patch
+          git apply tools/v0.5.0-consumer-service.patch
+          git apply --check tools/v0.5.0-host-main.patch
+          git apply tools/v0.5.0-host-main.patch
+          git apply --check /tmp/v051.patch
+          git apply /tmp/v051.patch
+          git apply --check /tmp/v052.patch
+          git apply /tmp/v052.patch
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android 16 SDK
+        run: sdkmanager "platform-tools" "platforms;android-36" "build-tools;36.0.0"
+
+      - name: Set up Gradle 8.13
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.13'
+
+      - name: Compile Host and Rental field build
+        run: gradle --no-daemon :host:assembleDebug :consumer:assembleFieldTest
+
+      - name: Verify v0.5.2 UI and frozen Stage-A boundaries
+        run: |
+          set -euo pipefail
+          AAPT2="$ANDROID_HOME/build-tools/36.0.0/aapt2"
+          HOST_APK="$(find apps/host/app/build/outputs/apk/debug -maxdepth 1 -type f -name '*.apk' | head -n 1)"
+          RENTAL_APK="$(find apps/consumer/app/build/outputs/apk/fieldTest -maxdepth 1 -type f -name '*.apk' | head -n 1)"
+
+          test "$($AAPT2 dump packagename "$HOST_APK")" = 'com.jace.phonelending.host.dev'
+          test "$($AAPT2 dump packagename "$RENTAL_APK")" = 'com.jace.phonelending.consumer.field'
+          $AAPT2 dump badging "$HOST_APK" | grep -q "versionCode='6' versionName='0.5.2-dev'"
+          $AAPT2 dump badging "$RENTAL_APK" | grep -q "versionCode='8' versionName='0.5.2-field'"
+
+          MANIFEST="$($AAPT2 dump xmltree "$RENTAL_APK" --file AndroidManifest.xml)"
+          echo "$MANIFEST" | grep -q 'android.permission.SYSTEM_ALERT_WINDOW'
+          if echo "$MANIFEST" | grep 'android:testOnly' | grep -qE '0xffffffff|true'; then
+            echo 'ERROR: Rental field APK is testOnly=true'
+            exit 1
+          fi
+
+          # Frozen onboarding, state-authority, recovery, and readiness invariants.
+          grep -q 'SETUP — STEP 1 OF 2' apps/consumer/app/src/main/java/com/jace/phonelending/consumer/MainActivity.java
+          grep -q 'SETUP — STEP 2 OF 2' apps/consumer/app/src/main/java/com/jace/phonelending/consumer/MainActivity.java
+          grep -q 'if (!paired)' apps/consumer/app/src/main/java/com/jace/phonelending/consumer/MainActivity.java
+          grep -q 'renderLockAccessRequired' apps/consumer/app/src/main/java/com/jace/phonelending/consumer/MainActivity.java
+          grep -q 'if (!pairing.isPaired()) return;' apps/consumer/app/src/main/java/com/jace/phonelending/consumer/ConsumerService.java
+          grep -q 'pairing.isPaired() && policy.softLockPermissionGranted()' apps/consumer/app/src/main/java/com/jace/phonelending/consumer/ConsumerService.java
+          grep -q 'lock_access_required' apps/consumer/app/src/main/java/com/jace/phonelending/consumer/ConsumerService.java
+          grep -q 'hasLockAccessProblem' apps/host/app/src/main/java/com/jace/phonelending/host/MainActivity.java
+          grep -q 'NEEDS ATTENTION' apps/host/app/src/main/java/com/jace/phonelending/host/MainActivity.java
+          grep -q 'MAX_LOCK_MS = 5L \* 60L \* 1000L' apps/consumer/app/src/main/java/com/jace/phonelending/consumer/DevelopmentSoftLock.java
+          grep -q 'tapCount >= 7' apps/consumer/app/src/main/java/com/jace/phonelending/consumer/DevelopmentSoftLock.java
+
+          # v0.5.2 presentation boundary checks.
+          grep -q "com.google.android.material:material:1.14.0" apps/host/app/build.gradle
+          grep -q "com.google.android.material:material:1.14.0" apps/consumer/app/build.gradle
+          grep -q '@style/Theme.PhoneLending' apps/host/app/src/main/AndroidManifest.xml
+          grep -q '@style/Theme.PhoneLending' apps/consumer/app/src/main/AndroidManifest.xml
+          grep -q 'updateDashboardClockFields' apps/host/app/src/main/java/com/jace/phonelending/host/MainActivity.java
+          grep -q 'Waiting for Host' apps/consumer/app/src/main/java/com/jace/phonelending/consumer/MainActivity.java
+          test -f apps/host/app/src/main/res/values/themes.xml
+          test -f apps/consumer/app/src/main/res/values/themes.xml
+          test -f contracts/PhoneLending_StageA_Onboarding_Amendment_v1.5.1.md
+
+          rm -rf /tmp/rental-dex && mkdir -p /tmp/rental-dex
+          unzip -j "$RENTAL_APK" 'classes*.dex' -d /tmp/rental-dex >/dev/null
+          grep -a -q 'DevelopmentSoftLock' /tmp/rental-dex/classes*.dex || { echo 'ERROR: soft-lock implementation missing from APK'; exit 1; }
+          grep -a -q 'SETUP — STEP 1 OF 2' /tmp/rental-dex/classes*.dex || { echo 'ERROR: guided setup strings missing from APK'; exit 1; }
+
+          echo 'PASS: v0.5.2 presentation refresh compiled while Stage-A onboarding, pairing gate, Rental authority, permission-loss handling, seven-tap recovery, and five-minute fail-open remained present.'
+
+      - name: Verify compile APKs are unsigned
+        run: |
+          set -euo pipefail
+          HOST_APK="$(find apps/host/app/build/outputs/apk/debug -maxdepth 1 -type f -name '*.apk' | head -n 1)"
+          RENTAL_APK="$(find apps/consumer/app/build/outputs/apk/fieldTest -maxdepth 1 -type f -name '*.apk' | head -n 1)"
+          for apk in "$HOST_APK" "$RENTAL_APK"; do
+            if apksigner verify "$apk" >/dev/null 2>&1; then
+              echo "ERROR: compile artifact unexpectedly signed: $apk"
+              exit 1
+            fi
+          done
+
+      - name: Collect unsigned artifacts
+        run: |
+          set -euo pipefail
+          mkdir -p unsigned-dist
+          HOST_APK="$(find apps/host/app/build/outputs/apk/debug -maxdepth 1 -type f -name '*.apk' | head -n 1)"
+          RENTAL_APK="$(find apps/consumer/app/build/outputs/apk/fieldTest -maxdepth 1 -type f -name '*.apk' | head -n 1)"
+          cp "$HOST_APK" unsigned-dist/PhoneLending-Host-v0.5.2-vc6-UNSIGNED.apk
+          cp "$RENTAL_APK" unsigned-dist/PhoneLending-Rental-v0.5.2-vc8-field-UNSIGNED.apk
+          sha256sum unsigned-dist/*.apk > unsigned-dist/SHA256SUMS.txt
+
+      - name: Upload unsigned APKs
+        uses: actions/upload-artifact@v4
+        with:
+          name: phonelending-v0.5.2-unsigned
+          path: unsigned-dist/
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Package patched source snapshot
+        run: |
+          set -euo pipefail
+          mkdir -p source-dist/PhoneLending-Control-v0.5.2-source
+          rsync -a --exclude '.git/' --exclude '**/build/' --exclude '.gradle/' --exclude 'source-dist/' --exclude 'unsigned-dist/' ./ source-dist/PhoneLending-Control-v0.5.2-source/
+          printf '%s\n' '${{ github.sha }}' > source-dist/PhoneLending-Control-v0.5.2-source/SOURCE_BRANCH_COMMIT.txt
+          printf '%s\n' 'v0.5.0 base patches, v0.5.1 guided onboarding, and v0.5.2 professional presentation patch were applied before this snapshot was created.' > source-dist/PhoneLending-Control-v0.5.2-source/PATCH_APPLICATION_NOTE.txt
+          find source-dist/PhoneLending-Control-v0.5.2-source -type f -print0 | sort -z | xargs -0 sha256sum > source-dist/SOURCE_SHA256SUMS.txt
+
+      - name: Upload source snapshot
+        uses: actions/upload-artifact@v4
+        with:
+          name: phonelending-v0.5.2-source
+          path: source-dist/
+          if-no-files-found: error
+          retention-days: 14
