@@ -55,7 +55,9 @@ jobs:
             echo 'ERROR: Rental field APK is testOnly=true'
             exit 1
           fi
-          unzip -p "$RENTAL_APK" classes.dex | grep -a -q 'DevelopmentSoftLock' || { echo 'ERROR: soft-lock implementation missing'; exit 1; }
+          rm -rf /tmp/pl-v050-dex && mkdir -p /tmp/pl-v050-dex
+          unzip -q "$RENTAL_APK" 'classes*.dex' -d /tmp/pl-v050-dex
+          grep -a -q 'DevelopmentSoftLock' /tmp/pl-v050-dex/classes*.dex || { echo 'ERROR: soft-lock implementation missing'; exit 1; }
           grep -q 'MAX_LOCK_MS = 5L \* 60L \* 1000L' apps/consumer/app/src/main/java/com/jace/phonelending/consumer/DevelopmentSoftLock.java
           grep -q 'tapCount >= 7' apps/consumer/app/src/main/java/com/jace/phonelending/consumer/DevelopmentSoftLock.java
           grep -q 'isManagementReady()' apps/consumer/app/src/main/java/com/jace/phonelending/consumer/ConsumerService.java
