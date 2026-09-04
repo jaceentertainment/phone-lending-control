@@ -1,0 +1,13 @@
+diff --git a/apps/consumer/app/src/main/java/com/jace/phonelending/consumer/ConsumerService.java b/apps/consumer/app/src/main/java/com/jace/phonelending/consumer/ConsumerService.java
+index c1bd731..8a53872 100644
+--- a/apps/consumer/app/src/main/java/com/jace/phonelending/consumer/ConsumerService.java
++++ b/apps/consumer/app/src/main/java/com/jace/phonelending/consumer/ConsumerService.java
+@@ -162,7 +162,7 @@ public class ConsumerService extends Service {
+ 
+                 if (expired) {
+                     DiagnosticReporter.event("SESSION_EXPIRED", "authoritative remaining=0");
+-                    DiagnosticReporter.report(this, "rental", pairing.getDeviceId(), "SESSION_EXPIRED", "authoritative timer reached zero");
++                    DiagnosticReporter.report(ConsumerService.this, "rental", pairing.getDeviceId(), "SESSION_EXPIRED", "authoritative timer reached zero");
+                 }
+ 
+                 if (policy.isTimerQualificationBuild()) {
