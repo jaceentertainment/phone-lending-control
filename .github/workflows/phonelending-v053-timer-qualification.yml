@@ -28,9 +28,9 @@ jobs:
           base64 -d /tmp/v052.patch.gz.b64 | gzip -d > /tmp/v052.patch
           echo 'baa3b11b1af7e00f43540b0c1975f90e9a6f6f320984da72ec7a5022dbf5573c  /tmp/v052.patch' | sha256sum -c -
 
-          echo 'df6be5fff538a352a95d24510da6c17510d82a8ca691a7c93a55d65545088d31  tools/v0.5.3-timer-qualification.patch.gz.b64' | sha256sum -c -
+          echo '8f146648fed89d24e91d76f5ac439bd927617033e87e632a9cc167083698c306  tools/v0.5.3-timer-qualification.patch.gz.b64' | sha256sum -c -
           base64 -d tools/v0.5.3-timer-qualification.patch.gz.b64 | gzip -d > /tmp/v053.patch
-          echo '846c8488c0e7c1bf7a99e17ca741622281b733a54f7fc318b2eec8425269245c  /tmp/v053.patch' | sha256sum -c -
+          echo '12c998cf9440377b8b1b5bd01d187b04b5e7f1a87bf660791e29de2caed5276f  /tmp/v053.patch' | sha256sum -c -
 
       - name: Apply proven baseline then timer qualification delta
         run: |
