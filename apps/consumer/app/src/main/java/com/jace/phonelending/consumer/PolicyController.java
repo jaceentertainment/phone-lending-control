@@ -9,6 +9,7 @@ import android.content.Intent;
 import android.content.IntentFilter;
 import android.content.pm.PackageManager;
 import android.os.Build;
+import android.provider.Settings;
 
 public final class PolicyController {
     private final Context context;
@@ -25,10 +26,24 @@ public final class PolicyController {
         return dpm != null && dpm.isDeviceOwnerApp(context.getPackageName());
     }
 
+    /** Current early-development lane: normal installable field package + reversible overlay lock. */
+    public boolean isSoftLockBuild() {
+        return context.getPackageName().endsWith(".field");
+    }
+
+    public boolean softLockPermissionGranted() {
+        return Build.VERSION.SDK_INT < 23 || Settings.canDrawOverlays(context);
+    }
+
+    public boolean isManagementReady() {
+        return isSoftLockBuild() ? softLockPermissionGranted() : isDeviceOwner();
+    }
+
     public ComponentName adminComponent() { return admin; }
 
     public void grantRequiredNotificationPermissionIfPossible() {
-        if (Build.VERSION.SDK_INT < 33 || !isDeviceOwner()) return;
+        if (Build.VERSION.SDK_INT < 33) return;
+        if (!isDeviceOwner()) return;
         try {
             dpm.setPermissionGrantState(admin, context.getPackageName(), Manifest.permission.POST_NOTIFICATIONS,
                     DevicePolicyManager.PERMISSION_GRANT_STATE_GRANTED);
@@ -36,17 +51,16 @@ public final class PolicyController {
     }
 
     public void configureLockTaskAllowlist() {
-        if (!isDeviceOwner()) return;
+        if (isSoftLockBuild() || !isDeviceOwner()) return;
         try {
             dpm.setLockTaskPackages(admin, new String[]{context.getPackageName()});
-            if (Build.VERSION.SDK_INT >= 28) {
-                dpm.setLockTaskFeatures(admin, DevicePolicyManager.LOCK_TASK_FEATURE_NONE);
-            }
+            if (Build.VERSION.SDK_INT >= 28) dpm.setLockTaskFeatures(admin, DevicePolicyManager.LOCK_TASK_FEATURE_NONE);
         } catch (Throwable ignored) {}
     }
 
     public void applyLockedHome() {
-        if (!isDeviceOwner()) return;
+        // Intentionally disabled for the field soft-lock milestone. Production hardening reuses this path later.
+        if (isSoftLockBuild() || !isDeviceOwner()) return;
         configureLockTaskAllowlist();
         try {
             IntentFilter filter = new IntentFilter(Intent.ACTION_MAIN);
@@ -58,18 +72,14 @@ public final class PolicyController {
     }
 
     public void clearLockedHome() {
-        if (!isDeviceOwner()) return;
-        try {
-            dpm.clearPackagePersistentPreferredActivities(admin, context.getPackageName());
-        } catch (Throwable ignored) {}
+        if (isSoftLockBuild() || !isDeviceOwner()) return;
+        try { dpm.clearPackagePersistentPreferredActivities(admin, context.getPackageName()); } catch (Throwable ignored) {}
     }
 
     public void enterLockTask(Activity activity) {
-        if (!isDeviceOwner()) return;
+        if (isSoftLockBuild() || !isDeviceOwner()) return;
         configureLockTaskAllowlist();
-        try {
-            if (dpm.isLockTaskPermitted(context.getPackageName())) activity.startLockTask();
-        } catch (Throwable ignored) {}
+        try { if (dpm.isLockTaskPermitted(context.getPackageName())) activity.startLockTask(); } catch (Throwable ignored) {}
     }
 
     public void exitLockTask(Activity activity) {
@@ -77,6 +87,10 @@ public final class PolicyController {
     }
 
     public void applyRestrictedAndBringToFront() {
+        if (isSoftLockBuild()) {
+            ConsumerService.armSoftLock(context);
+            return;
+        }
         if (!isDeviceOwner()) return;
         applyLockedHome();
         try {
@@ -87,7 +101,8 @@ public final class PolicyController {
     }
 
     public void applyActiveAndOpenHome() {
-        clearLockedHome();
+        if (isSoftLockBuild()) ConsumerService.releaseSoftLock(context);
+        else clearLockedHome();
         try {
             Intent home = new Intent(Intent.ACTION_MAIN);
             home.addCategory(Intent.CATEGORY_HOME);
