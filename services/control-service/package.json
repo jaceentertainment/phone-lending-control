@@ -1,0 +1,9 @@
+{
+  "name": "phonelending-control-service",
+  "private": true,
+  "version": "0.1.0",
+  "type": "commonjs",
+  "engines": {
+    "node": ">=20"
+  }
+}
