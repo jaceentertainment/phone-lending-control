@@ -30,7 +30,10 @@ assert len(names)==6 and set(names)==allowed,names
 # System bars / fixed shell.
 for x in ['WindowCompat.setDecorFitsSystemWindows(getWindow(), false)','WindowInsetsCompat.Type.systemBars()','WindowInsetsCompat.Type.displayCutout()','appBarHost','bottomSystemHost','R.color.pl_surface']:
     assert x in host,x
-assert host.index('shell.addView(appBarHost') < host.index('shell.addView(scroll') < host.index('shell.addView(bottomSystemHost')
+app_i=host.index('shell.addView(appBarHost')
+scroll_i=host.index('shell.addView(pageScroll')
+bottom_i=host.index('shell.addView(bottomSystemHost')
+assert app_i < scroll_i < bottom_i, (app_i, scroll_i, bottom_i)
 assert 'bottomSystemHost.setPadding(bars.left, 0, bars.right, bars.bottom)' in host
 assert 'appBarHost.setPadding(bars.left + dp(HostDesign.PAGE_MARGIN), bars.top' in host
 
