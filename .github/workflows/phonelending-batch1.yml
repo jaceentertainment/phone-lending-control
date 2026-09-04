@@ -1,9 +1,9 @@
-name: PhoneLending v0.4.2 Field Provisioning Build
+name: PhoneLending v0.5.0 Light Lock Development Build
 
 on:
   push:
     branches:
-      - batch2-v0.4.2-field-provisioning
+      - batch2-v0.5.0-light-lock
   workflow_dispatch:
 
 jobs:
@@ -12,102 +12,64 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
       - name: Set up JDK 17
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
-
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
-
       - name: Install Android 16 SDK
         run: sdkmanager "platform-tools" "platforms;android-36" "build-tools;36.0.0"
-
       - name: Set up Gradle 8.13
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.13'
-
-      - name: Compile Host and all Consumer boundaries
-        run: gradle --no-daemon :host:assembleDebug :consumer:assembleDebug :consumer:assembleFieldTest :consumer:assembleRelease
-
-      - name: Verify recovery source-set boundaries
+      - name: Compile Host and Rental field build
+        run: gradle --no-daemon :host:assembleDebug :consumer:assembleFieldTest
+      - name: Verify early-development light-lock boundary
         run: |
           set -euo pipefail
-          ENG_APK="$(find apps/consumer/app/build/outputs/apk/debug -maxdepth 1 -type f -name '*.apk' | head -n 1)"
-          FIELD_APK="$(find apps/consumer/app/build/outputs/apk/fieldTest -maxdepth 1 -type f -name '*.apk' | head -n 1)"
-          RELEASE_APK="$(find apps/consumer/app/build/outputs/apk/release -maxdepth 1 -type f -name '*.apk' | head -n 1)"
-          rm -rf /tmp/pl-eng /tmp/pl-field /tmp/pl-release
-          mkdir -p /tmp/pl-eng /tmp/pl-field /tmp/pl-release
-          unzip -q "$ENG_APK" 'classes*.dex' -d /tmp/pl-eng
-          unzip -q "$FIELD_APK" 'classes*.dex' -d /tmp/pl-field
-          unzip -q "$RELEASE_APK" 'classes*.dex' -d /tmp/pl-release
-          CLASS_DESCRIPTOR='Lcom/jace/phonelending/consumer/DebugRecoveryHooks;'
-          grep -a -q "$CLASS_DESCRIPTOR" /tmp/pl-eng/classes*.dex || { echo 'ERROR: engineering recovery hook missing'; exit 1; }
-          grep -a -q "$CLASS_DESCRIPTOR" /tmp/pl-field/classes*.dex || { echo 'ERROR: field recovery hook missing'; exit 1; }
-          if grep -a -q "$CLASS_DESCRIPTOR" /tmp/pl-release/classes*.dex; then
-            echo 'ERROR: test recovery implementation leaked into release boundary'
-            exit 1
-          fi
-          echo 'PASS: engineering and field recovery hooks present; release boundary clean.'
-
+          AAPT2="$ANDROID_HOME/build-tools/36.0.0/aapt2"
+          RENTAL_APK="$(find apps/consumer/app/build/outputs/apk/fieldTest -maxdepth 1 -type f -name '*.apk' | head -n 1)"
+          PACKAGE="$($AAPT2 dump packagename "$RENTAL_APK")"
+          test "$PACKAGE" = 'com.jace.phonelending.consumer.field' || { echo "ERROR: Rental package identity mismatch: $PACKAGE"; exit 1; }
+          MANIFEST="$($AAPT2 dump xmltree "$RENTAL_APK" --file AndroidManifest.xml)"
+          echo "$MANIFEST" | grep -q 'android.permission.SYSTEM_ALERT_WINDOW' || { echo 'ERROR: light-lock overlay permission missing'; exit 1; }
+          if echo "$MANIFEST" | grep -q 'android.app.action.DEVICE_ADMIN_ENABLED'; then echo 'ERROR: Device Admin leaked into light-lock field build'; exit 1; fi
+          if echo "$MANIFEST" | grep -q 'android.app.action.GET_PROVISIONING_MODE'; then echo 'ERROR: Device Owner provisioning leaked into light-lock field build'; exit 1; fi
+          if echo "$MANIFEST" | grep -q 'android.intent.category.HOME'; then echo 'ERROR: persistent HOME leaked into light-lock field build'; exit 1; fi
+          echo "$MANIFEST" | grep -q 'android:testOnly' || { echo 'ERROR: testOnly attribute missing'; exit 1; }
+          if echo "$MANIFEST" | grep 'android:testOnly' | grep -qE '0xffffffff|true'; then echo 'ERROR: Rental field APK is testOnly=true'; exit 1; fi
+          rm -rf /tmp/pl-field && mkdir -p /tmp/pl-field
+          unzip -q "$RENTAL_APK" 'classes*.dex' -d /tmp/pl-field
+          grep -a -q 'Lcom/jace/phonelending/consumer/SoftLockOverlay;' /tmp/pl-field/classes*.dex || { echo 'ERROR: SoftLockOverlay missing'; exit 1; }
+          if grep -a -q 'Lcom/jace/phonelending/consumer/DebugRecoveryHooks;' /tmp/pl-field/classes*.dex; then echo 'ERROR: old PIN recovery hook leaked into field Rental artifact'; exit 1; fi
+          echo 'PASS: v0.5.0 field Rental is normal-install, soft-lock only, and has no Device Owner/HOME/PIN recovery boundary.'
       - name: Verify compile APKs are unsigned
         run: |
           set -euo pipefail
           HOST_APK="$(find apps/host/app/build/outputs/apk/debug -maxdepth 1 -type f -name '*.apk' | head -n 1)"
-          ENG_APK="$(find apps/consumer/app/build/outputs/apk/debug -maxdepth 1 -type f -name '*.apk' | head -n 1)"
-          FIELD_APK="$(find apps/consumer/app/build/outputs/apk/fieldTest -maxdepth 1 -type f -name '*.apk' | head -n 1)"
-          for apk in "$HOST_APK" "$ENG_APK" "$FIELD_APK"; do
-            if apksigner verify "$apk" >/dev/null 2>&1; then
-              echo "ERROR: compile-only APK unexpectedly signed: $apk"
-              exit 1
-            fi
-          done
-          echo 'PASS: compile-only Host, engineering Consumer, and field Consumer APKs are unsigned.'
-
-      - name: Verify field manifest is normal-install and package-isolated
-        run: |
-          set -euo pipefail
-          AAPT2="$ANDROID_HOME/build-tools/36.0.0/aapt2"
-          FIELD_APK="$(find apps/consumer/app/build/outputs/apk/fieldTest -maxdepth 1 -type f -name '*.apk' | head -n 1)"
-          PACKAGE="$($AAPT2 dump packagename "$FIELD_APK")"
-          test "$PACKAGE" = 'com.jace.phonelending.consumer.field' || { echo "ERROR: field package identity mismatch: $PACKAGE"; exit 1; }
-          MANIFEST="$($AAPT2 dump xmltree "$FIELD_APK" --file AndroidManifest.xml)"
-          echo "$MANIFEST" | grep -q 'android:testOnly' || { echo 'ERROR: testOnly attribute missing from field manifest boundary'; exit 1; }
-          if echo "$MANIFEST" | grep 'android:testOnly' | grep -qE '0xffffffff|true'; then
-            echo 'ERROR: field APK is marked testOnly=true'
-            exit 1
-          fi
-          echo 'PASS: field Consumer has isolated package identity and testOnly=false.'
-
+          RENTAL_APK="$(find apps/consumer/app/build/outputs/apk/fieldTest -maxdepth 1 -type f -name '*.apk' | head -n 1)"
+          for apk in "$HOST_APK" "$RENTAL_APK"; do if apksigner verify "$apk" >/dev/null 2>&1; then echo "ERROR: compile-only APK unexpectedly signed: $apk"; exit 1; fi; done
       - name: Collect unsigned artifacts and signer
         run: |
           set -euo pipefail
           mkdir -p unsigned-dist signing-tool
           HOST_APK="$(find apps/host/app/build/outputs/apk/debug -maxdepth 1 -type f -name '*.apk' | head -n 1)"
-          ENG_APK="$(find apps/consumer/app/build/outputs/apk/debug -maxdepth 1 -type f -name '*.apk' | head -n 1)"
-          FIELD_APK="$(find apps/consumer/app/build/outputs/apk/fieldTest -maxdepth 1 -type f -name '*.apk' | head -n 1)"
-          cp "$HOST_APK" unsigned-dist/PhoneLending-Host-v0.4.1-vc3-UNSIGNED.apk
-          cp "$ENG_APK" unsigned-dist/PhoneLending-Consumer-v0.4.2-vc4-engineering-UNSIGNED.apk
-          cp "$FIELD_APK" unsigned-dist/PhoneLending-Consumer-v0.4.2-vc4-field-UNSIGNED.apk
-          cat > unsigned-dist/NON_DISTRIBUTABLE.txt <<'EOF'
-          THESE APKs ARE UNSIGNED COMPILE ARTIFACTS.
-          They are not PhoneLending distributions until signed by the pinned external development identities and independently verified.
-          Host remains v0.4.1/vc3 in this Consumer-only field-provisioning change; do not relabel it v0.4.2.
-          EOF
+          RENTAL_APK="$(find apps/consumer/app/build/outputs/apk/fieldTest -maxdepth 1 -type f -name '*.apk' | head -n 1)"
+          cp "$HOST_APK" unsigned-dist/PhoneLending-Host-v0.5.0-vc4-UNSIGNED.apk
+          cp "$RENTAL_APK" unsigned-dist/PhoneLending-Rental-v0.5.0-vc6-field-UNSIGNED.apk
+          printf '%s\n' 'UNSIGNED COMPILE ARTIFACTS — NOT DISTRIBUTABLE. v0.5.0 is early-development light-lock software, not production security.' > unsigned-dist/NON_DISTRIBUTABLE.txt
           sha256sum unsigned-dist/*.apk > unsigned-dist/SHA256SUMS.txt
           cp "$ANDROID_HOME/build-tools/36.0.0/lib/apksigner.jar" signing-tool/apksigner-36.0.0.jar
-
       - name: Upload unsigned compile artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: phonelending-v0.4.2-UNSIGNED-NON-DISTRIBUTABLE
+          name: phonelending-v0.5.0-UNSIGNED-NON-DISTRIBUTABLE
           path: unsigned-dist/
           if-no-files-found: error
           retention-days: 14
-
       - name: Upload Android signer
         uses: actions/upload-artifact@v4
         with:
@@ -115,25 +77,16 @@ jobs:
           path: signing-tool/
           if-no-files-found: error
           retention-days: 14
-
       - name: Package exact source snapshot
         run: |
           set -euo pipefail
-          mkdir -p source-dist/PhoneLending-Control-v0.4.2-source
-          rsync -a \
-            --exclude '.git/' \
-            --exclude '**/build/' \
-            --exclude '.gradle/' \
-            --exclude 'source-dist/' \
-            --exclude 'unsigned-dist/' \
-            --exclude 'signing-tool/' \
-            ./ source-dist/PhoneLending-Control-v0.4.2-source/
-          printf '%s\n' '${{ github.sha }}' > source-dist/PhoneLending-Control-v0.4.2-source/SOURCE_COMMIT.txt
-          find source-dist/PhoneLending-Control-v0.4.2-source -type f -print0 | sort -z | xargs -0 sha256sum > source-dist/SOURCE_SHA256SUMS.txt
-
+          mkdir -p source-dist/PhoneLending-Control-v0.5.0-source
+          rsync -a --exclude '.git/' --exclude '**/build/' --exclude '.gradle/' --exclude 'source-dist/' --exclude 'unsigned-dist/' --exclude 'signing-tool/' ./ source-dist/PhoneLending-Control-v0.5.0-source/
+          printf '%s\n' '${{ github.sha }}' > source-dist/PhoneLending-Control-v0.5.0-source/SOURCE_COMMIT.txt
+          find source-dist/PhoneLending-Control-v0.5.0-source -type f -print0 | sort -z | xargs -0 sha256sum > source-dist/SOURCE_SHA256SUMS.txt
       - name: Upload source snapshot
         uses: actions/upload-artifact@v4
         with:
-          name: phonelending-v0.4.2-source
+          name: phonelending-v0.5.0-source
           path: source-dist/
           if-no-files-found: error
