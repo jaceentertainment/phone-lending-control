@@ -20,9 +20,10 @@ cat tools/v0.5.5-host-ux-notification.patch.gz.b64.part-* > /tmp/v055.patch.gz.b
 echo '23806583f53dc316f3ecd7a49d668fa0fd04871037bb253d99ee11383df1232d  /tmp/v055.patch.gz.b64' | sha256sum -c -
 base64 -d /tmp/v055.patch.gz.b64 | gzip -d > /tmp/v055.patch
 echo '791044bca5b4487f9e4a6b7a094e0fb86ac2ef7aa654bc6df8c0435ff1867fdf  /tmp/v055.patch' | sha256sum -c -
+echo '55b78a10eb49bf6db6486b2504326c0d9e3e4c793d412cfd651c7942aa7a1a0d  tools/v0.5.5-compile-fix.patch' | sha256sum -c -
 
 base64 -d tools/v0.5.1-guided-onboarding.patch.gz.b64 | gzip -d > /tmp/v051.patch
-for p in tools/v0.5.0-consumer-service.patch tools/v0.5.0-host-main.patch /tmp/v051.patch /tmp/v052.patch /tmp/v053.patch /tmp/v054.patch /tmp/v055.patch; do
+for p in tools/v0.5.0-consumer-service.patch tools/v0.5.0-host-main.patch /tmp/v051.patch /tmp/v052.patch /tmp/v053.patch /tmp/v054.patch /tmp/v055.patch tools/v0.5.5-compile-fix.patch; do
   git apply --check "$p"
   git apply "$p"
 done
