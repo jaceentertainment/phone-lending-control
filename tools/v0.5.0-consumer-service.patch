@@ -1,0 +1,184 @@
+--- a/apps/consumer/app/src/main/java/com/jace/phonelending/consumer/ConsumerService.java
++++ b/apps/consumer/app/src/main/java/com/jace/phonelending/consumer/ConsumerService.java
+@@ -46,6 +46,8 @@
+     private static final int STATUS_NOTIFICATION = 1001;
+     private static final int WARNING_NOTIFICATION = 1002;
+     private static final String CAPABILITIES = "status,start,extend,end,prepare,maintenance,relock";
++    private static final String ACTION_ARM_SOFT_LOCK = "com.jace.phonelending.consumer.ARM_SOFT_LOCK";
++    private static final String ACTION_RELEASE_SOFT_LOCK = "com.jace.phonelending.consumer.RELEASE_SOFT_LOCK";
+ 
+     private static volatile int advertisedPort = 0;
+     private static volatile String advertisedServiceName = "";
+@@ -68,9 +70,23 @@
+     private boolean warned30;
+     private boolean warned10;
+     private boolean lastDevUnrestricted = false;
++    private DevelopmentSoftLock softLock;
+ 
+     public static void start(Context context) {
++        startWithAction(context, null);
++    }
++
++    public static void armSoftLock(Context context) {
++        startWithAction(context, ACTION_ARM_SOFT_LOCK);
++    }
++
++    public static void releaseSoftLock(Context context) {
++        startWithAction(context, ACTION_RELEASE_SOFT_LOCK);
++    }
++
++    private static void startWithAction(Context context, String action) {
+         Intent i = new Intent(context, ConsumerService.class);
++        if (action != null) i.setAction(action);
+         try {
+             if (Build.VERSION.SDK_INT >= 26) context.startForegroundService(i);
+             else context.startService(i);
+@@ -86,6 +102,7 @@
+         sessions = new SessionStore(this);
+         pairing = new PairingManager(this);
+         policy = new PolicyController(this);
++        softLock = new DevelopmentSoftLock(this);
+         replayPrefs = createDeviceProtectedStorageContext().getSharedPreferences("replay_cache_v2", MODE_PRIVATE);
+         loadReplayCache();
+         createChannels();
+@@ -95,7 +112,13 @@
+         handler.post(tick);
+     }
+ 
+-    @Override public int onStartCommand(Intent intent, int flags, int startId) { return START_STICKY; }
++    @Override public int onStartCommand(Intent intent, int flags, int startId) {
++        if (intent != null && policy.isSoftLockBuild()) {
++            if (ACTION_ARM_SOFT_LOCK.equals(intent.getAction())) armSoftLockForCurrentState();
++            else if (ACTION_RELEASE_SOFT_LOCK.equals(intent.getAction()) && softLock != null) softLock.release();
++        }
++        return START_STICKY;
++    }
+     @Override public IBinder onBind(Intent intent) { return null; }
+ 
+     @Override
+@@ -106,37 +129,46 @@
+         advertisedPort = 0;
+         advertisedServiceName = "";
+         io.shutdownNow();
++        if (softLock != null) softLock.release();
+         super.onDestroy();
+     }
+ 
+     private final Runnable tick = new Runnable() {
+         @Override public void run() {
+             try {
+-                if (policy.isDeviceOwner()) sessions.initializeProvisioned();
++                String stateBefore = sessions.getState();
++                if (policy.isManagementReady()) sessions.initializeProvisioned();
+                 sessions.reconcileMaintenance();
+-                String stateBefore = sessions.getState();
+                 boolean expired = sessions.expireIfNeeded();
+                 String state = sessions.getState();
+ 
+-                if (expired || (!state.equals(stateBefore) && isRestricted(state))) {
+-                    policy.applyRestrictedAndBringToFront();
+-                } else if (isRestricted(state)) {
+-                    policy.applyLockedHome();
+-                } else if (SessionStore.ACTIVE.equals(state)) {
+-                    policy.clearLockedHome();
+-                } else if (SessionStore.ADMIN_MAINTENANCE.equals(state)) {
+-                    boolean unrestricted = sessions.isDevUnrestricted();
+-                    if (unrestricted) {
++                if (policy.isSoftLockBuild()) {
++                    if (SessionStore.ACTIVE.equals(state) || SessionStore.ADMIN_MAINTENANCE.equals(state)) {
++                        if (softLock != null) softLock.release();
++                    } else if (expired || (!state.equals(stateBefore) && isRestricted(state))) {
++                        armSoftLockForCurrentState();
++                    }
++                } else {
++                    if (expired || (!state.equals(stateBefore) && isRestricted(state))) {
++                        policy.applyRestrictedAndBringToFront();
++                    } else if (isRestricted(state)) {
++                        policy.applyLockedHome();
++                    } else if (SessionStore.ACTIVE.equals(state)) {
+                         policy.clearLockedHome();
++                    } else if (SessionStore.ADMIN_MAINTENANCE.equals(state)) {
++                        boolean unrestricted = sessions.isDevUnrestricted();
++                        if (unrestricted) {
++                            policy.clearLockedHome();
++                        } else {
++                            policy.applyLockedHome();
++                            if (lastDevUnrestricted || !SessionStore.ADMIN_MAINTENANCE.equals(stateBefore)) {
++                                policy.applyRestrictedAndBringToFront();
++                            }
++                        }
++                        lastDevUnrestricted = unrestricted;
+                     } else {
+-                        policy.applyLockedHome();
+-                        if (lastDevUnrestricted || !SessionStore.ADMIN_MAINTENANCE.equals(stateBefore)) {
+-                            policy.applyRestrictedAndBringToFront();
+-                        }
++                        lastDevUnrestricted = false;
+                     }
+-                    lastDevUnrestricted = unrestricted;
+-                } else {
+-                    lastDevUnrestricted = false;
+                 }
+ 
+                 handleWarnings(state);
+@@ -154,6 +186,13 @@
+         return SessionStore.AVAILABLE_LOCKED.equals(state)
+                 || SessionStore.EXPIRED_LOCKED.equals(state)
+                 || SessionStore.RECOVERY_LOCKED.equals(state);
++    }
++
++    private void armSoftLockForCurrentState() {
++        if (!policy.isSoftLockBuild() || !policy.softLockPermissionGranted() || softLock == null) return;
++        String state = sessions.getState();
++        if (!isRestricted(state)) return;
++        softLock.arm(state, pairing.getDeviceId());
+     }
+ 
+     private void createChannels() {
+@@ -342,7 +381,7 @@
+     }
+ 
+     private JSONObject processPair(JSONObject request) throws Exception {
+-        if (!policy.isDeviceOwner()) return error("not_provisioned");
++        if (!policy.isManagementReady()) return error("not_ready");
+         if (SessionStore.ACTIVE.equals(sessions.getState())) return error("pairing_not_allowed_active");
+ 
+         int protocol = request.optInt("protocol", 0);
+@@ -425,6 +464,7 @@
+                 long seconds = parsePositive(payload, 24 * 3600L);
+                 if (seconds <= 0) return false;
+                 sessions.startSession(seconds);
++                if (softLock != null) softLock.release();
+                 policy.applyActiveAndOpenHome();
+                 return true;
+             }
+@@ -438,12 +478,14 @@
+             case "END":
+                 if (!SessionStore.ACTIVE.equals(state)) return false;
+                 sessions.endSession();
+-                policy.applyRestrictedAndBringToFront();
++                if (policy.isSoftLockBuild()) armSoftLockForCurrentState();
++                else policy.applyRestrictedAndBringToFront();
+                 return true;
+             case "PREPARE":
+                 if (!SessionStore.EXPIRED_LOCKED.equals(state)) return false;
+                 sessions.prepareAvailable();
+-                policy.applyRestrictedAndBringToFront();
++                if (policy.isSoftLockBuild()) armSoftLockForCurrentState();
++                else policy.applyRestrictedAndBringToFront();
+                 return true;
+             case "MAINTENANCE":
+                 if (SessionStore.ACTIVE.equals(state)) return false;
+@@ -451,6 +493,12 @@
+                 policy.applyRestrictedAndBringToFront();
+                 return true;
+             case "RELOCK":
++                if (policy.isSoftLockBuild()) {
++                    if (!SessionStore.AVAILABLE_LOCKED.equals(state) && !SessionStore.EXPIRED_LOCKED.equals(state)
++                            && !SessionStore.RECOVERY_LOCKED.equals(state)) return false;
++                    armSoftLockForCurrentState();
++                    return true;
++                }
+                 if (!SessionStore.ADMIN_MAINTENANCE.equals(state)) return false;
+                 sessions.exitMaintenance();
+                 policy.applyRestrictedAndBringToFront();
