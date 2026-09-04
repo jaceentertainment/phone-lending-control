@@ -16,8 +16,8 @@ android {
         applicationId 'com.jace.phonelending.host'
         minSdk 28
         targetSdk 36
-        versionCode 3
-        versionName '0.4.1'
+        versionCode 4
+        versionName '0.5.0'
     }
 
     signingConfigs {
