@@ -1,3 +1,1 @@
-# Batch 1 CI
-
-This branch is the isolated PhoneLending v0.3.0 development build branch.
+PhoneLending v0.5.0 light-lock development build. Branch: batch2-v0.5.0-light-lock.
