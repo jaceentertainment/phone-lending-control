@@ -16,8 +16,8 @@ android {
         applicationId 'com.jace.phonelending.host'
         minSdk 28
         targetSdk 36
-        versionCode 3
-        versionName '0.4.1'
+        versionCode 4
+        versionName '0.5.0'
     }
 
     signingConfigs {
@@ -38,8 +38,6 @@ android {
             applicationIdSuffix '.dev'
             versionNameSuffix '-dev'
             debuggable true
-            // Never fall back to Gradle's machine-local debug keystore. Without the
-            // externally supplied pinned signer this build is deliberately unsigned.
             signingConfig stableDevSigningConfigured ? signingConfigs.hostDev : null
         }
         release {
