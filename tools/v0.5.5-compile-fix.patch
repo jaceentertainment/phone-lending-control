@@ -1,0 +1,13 @@
+diff --git a/apps/host/app/src/main/java/com/jace/phonelending/host/MainActivity.java b/apps/host/app/src/main/java/com/jace/phonelending/host/MainActivity.java
+index 7ae8c1d..fd319be 100644
+--- a/apps/host/app/src/main/java/com/jace/phonelending/host/MainActivity.java
++++ b/apps/host/app/src/main/java/com/jace/phonelending/host/MainActivity.java
+@@ -563,7 +563,7 @@ public class MainActivity extends AppCompatActivity {
+                 View spacer = new View(this);
+                 LinearLayout.LayoutParams sp = new LinearLayout.LayoutParams(0, dp(58), 1f);
+                 sp.setMargins(dp(4), 0, 0, 0);
+-                line.addView(sp, sp);
++                line.addView(spacer, sp);
+             }
+         }
+     }
