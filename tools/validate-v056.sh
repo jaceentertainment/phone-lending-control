@@ -109,7 +109,9 @@ gate = 'if (!state.equals(lastNotificationState) || notificationEnd != lastNotif
 assert gate in rental
 assert rental.index(gate) < rental.index('nm.notify(STATUS_NOTIFICATION, buildStatusNotification())')
 assert 'rem <= 300' in rental and 'rem <= 60' in rental
-assert 'warned30' not in rental and 'warned10' not in rental
+identifiers = set(re.findall(r'\bwarned\d+\b', rental))
+assert 'warned300' in identifiers and 'warned60' in identifiers, identifiers
+assert 'warned30' not in identifiers and 'warned10' not in identifiers, identifiers
 PY
 
 echo 'PASS: v0.5.6 professional Host/Rental UX, pricing, notification, pairing and authority boundaries validated.'
