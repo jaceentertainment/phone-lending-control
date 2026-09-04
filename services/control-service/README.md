@@ -1,6 +1,6 @@
 # PhoneLending Control Service — Phase 1
 
-Minimal, non-authoritative Vercel service for the v0.5.4 qualification lane.
+Minimal, non-authoritative Vercel service for the v0.5.4+ qualification lane.
 
 Endpoints:
 - `POST /api/report` — receives a strict allowlist of sanitized engineering diagnostics and writes one `PL_DIAG` line to Vercel runtime logs.
@@ -9,3 +9,7 @@ Endpoints:
 This service has no endpoint that can start/end/extend a rental, mutate canonical state, unlock a phone, or issue recovery authorization. Server-assisted recovery remains contract-only and deferred.
 
 Deploy this directory as the Vercel project root. After deployment, set the generated HTTPS origin in both Android `ControlServiceConfig.java` files before producing a field APK.
+
+## Diagnostic retention (v0.5.5 rule)
+
+`POST /api/report` emits sanitized structured `PL_DIAG` runtime events; it does not create per-device `.log` files or a permanent report database. Runtime-log retention is provider-managed and transient. If a persistent PhoneLending report store is introduced later, ordinary reports must use automatic TTL cleanup (initial design target: <= 7 days) and diagnostics must remain non-authoritative.
