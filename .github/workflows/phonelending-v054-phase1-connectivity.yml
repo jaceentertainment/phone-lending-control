@@ -26,9 +26,9 @@ jobs:
           echo '2d6c4817f3362c7c55bedc29a556c55237aa22a789c6f0530f9b2f36d0cae6e4  tools/v0.5.4-phase1-android.patch.gz.b64.part-00' | sha256sum -c -
           echo 'b0cac93952b9ce70abd923c086aefed8085bdfed59791220b59b0850d44cd248  tools/v0.5.4-phase1-android.patch.gz.b64.part-01' | sha256sum -c -
           echo '718a6cc46992523f22c227bbf2033f72b76947900cbc381d9d9f2238c0e29c5d  tools/v0.5.4-phase1-android.patch.gz.b64.part-02' | sha256sum -c -
-          echo '1944302254014e8f2d680a3b3828041d19eab8f378ba9451e60ffc2b908f87fe  tools/v0.5.4-phase1-android.patch.gz.b64.part-03' | sha256sum -c -
+          echo 'd4ce363b2e518d333c5dbe3212894f3a442ad97b28b72d0987b6805971d6a42f  tools/v0.5.4-phase1-android.patch.gz.b64.part-03' | sha256sum -c -
           cat tools/v0.5.4-phase1-android.patch.gz.b64.part-* > /tmp/v054.patch.gz.b64
-          echo '85d887a7733cf0df7fb9abec9a3d0cc2264c984a47fc35a727fe265d7eac0b32  /tmp/v054.patch.gz.b64' | sha256sum -c -
+          echo '410835611498f381cd00651a52d233ef6e2c3bce72955a07496618b9293dee10  /tmp/v054.patch.gz.b64' | sha256sum -c -
           base64 -d /tmp/v054.patch.gz.b64 | gzip -d > /tmp/v054.patch
           echo '81f25cd8db4ee81075aa492ec88db6835170c67f3066fff1ad81e0e57a6c859d  /tmp/v054.patch' | sha256sum -c -
 
