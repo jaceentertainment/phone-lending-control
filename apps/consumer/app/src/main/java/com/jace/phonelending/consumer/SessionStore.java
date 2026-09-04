@@ -15,6 +15,8 @@ public final class SessionStore {
     public static final String ADMIN_MAINTENANCE = "ADMIN_MAINTENANCE";
     public static final String RECOVERY_LOCKED = "RECOVERY_LOCKED";
 
+    public static final long DEV_SOFT_LOCK_LEASE_MS = 5L * 60L * 1000L;
+
     private final Context context;
     private final SharedPreferences prefs;
 
@@ -31,10 +33,16 @@ public final class SessionStore {
         prefs.edit().putString("state", state).commit();
     }
 
-    public synchronized void initializeProvisioned() {
+    /** Early-development setup: overlay permission, not Device Owner, is the readiness gate. */
+    public synchronized void initializeDevelopment() {
         if (UNPROVISIONED.equals(getState())) {
             prefs.edit().putString("state", AVAILABLE_LOCKED).commit();
         }
+    }
+
+    /** Retained for source compatibility with the later managed-device milestone. */
+    public synchronized void initializeProvisioned() {
+        initializeDevelopment();
     }
 
     public synchronized void startSession(long durationSeconds) {
@@ -53,6 +61,7 @@ public final class SessionStore {
                 .putLong("lastObservedEpoch", nowEpoch)
                 .putString("maintenanceUnderlying", "")
                 .commit();
+        releaseSoftLockLease();
     }
 
     public synchronized void extendSession(long additionalSeconds) {
@@ -98,6 +107,7 @@ public final class SessionStore {
     public synchronized boolean expireIfNeeded() {
         if (ACTIVE.equals(getState()) && remainingSeconds() <= 0L) {
             prefs.edit().putString("state", EXPIRED_LOCKED).commit();
+            armSoftLockLease();
             return true;
         }
         if (ADMIN_MAINTENANCE.equals(getState())) {
@@ -111,6 +121,7 @@ public final class SessionStore {
 
     public synchronized void endSession() {
         prefs.edit().putString("state", EXPIRED_LOCKED).commit();
+        armSoftLockLease();
     }
 
     public synchronized void prepareAvailable() {
@@ -124,6 +135,7 @@ public final class SessionStore {
                 .remove("endElapsed")
                 .remove("bootCount")
                 .commit();
+        armSoftLockLease();
     }
 
     public synchronized void enterMaintenance(long seconds) {
@@ -135,6 +147,7 @@ public final class SessionStore {
                 .putLong("maintenanceEndEpoch", System.currentTimeMillis() + seconds * 1000L)
                 .putBoolean("devUnrestricted", false)
                 .commit();
+        releaseSoftLockLease();
     }
 
     public synchronized void setDevUnrestricted(long seconds) {
@@ -184,6 +197,9 @@ public final class SessionStore {
                 .remove("maintenanceEndEpoch")
                 .remove("devUnrestrictedEnd")
                 .commit();
+        if (AVAILABLE_LOCKED.equals(underlying) || EXPIRED_LOCKED.equals(underlying) || RECOVERY_LOCKED.equals(underlying)) {
+            armSoftLockLease();
+        }
     }
 
     private long remainingSecondsForUnderlying() {
@@ -201,6 +217,7 @@ public final class SessionStore {
 
     public synchronized void markRecoveryLocked(String reason) {
         prefs.edit().putString("state", RECOVERY_LOCKED).putString("lockReason", reason).commit();
+        armSoftLockLease();
     }
 
     public synchronized String getLockReason() {
@@ -213,6 +230,65 @@ public final class SessionStore {
 
     public synchronized String getSessionId() {
         return prefs.getString("sessionId", "");
+    }
+
+    // -------------------------------------------------------------------------
+    // Early-development soft-lock lease. This is presentation enforcement only;
+    // it never changes canonical rental state and is NOT production security.
+    // -------------------------------------------------------------------------
+
+    public synchronized void armSoftLockLease() {
+        long nextGeneration = prefs.getLong("softLockGeneration", 0L) + 1L;
+        long now = SystemClock.elapsedRealtime();
+        prefs.edit()
+                .putLong("softLockGeneration", nextGeneration)
+                .putLong("softLockEndElapsed", now + DEV_SOFT_LOCK_LEASE_MS)
+                .putInt("softLockBootCount", readBootCount())
+                .commit();
+    }
+
+    public synchronized void releaseSoftLockLease() {
+        long generation = prefs.getLong("softLockGeneration", 0L);
+        if (generation <= 0L) return;
+        prefs.edit().putLong("softLockReleasedGeneration", generation).commit();
+    }
+
+    public synchronized boolean softLockLeaseActive() {
+        long generation = prefs.getLong("softLockGeneration", 0L);
+        if (generation <= 0L) return false;
+        if (prefs.getLong("softLockReleasedGeneration", -1L) == generation) return false;
+        reconcileSoftLockLeaseAfterBoot();
+        long end = prefs.getLong("softLockEndElapsed", 0L);
+        if (SystemClock.elapsedRealtime() >= end) {
+            releaseSoftLockLease();
+            return false;
+        }
+        return true;
+    }
+
+    public synchronized long softLockRemainingMs() {
+        if (!softLockLeaseActive()) return 0L;
+        return Math.max(0L, prefs.getLong("softLockEndElapsed", 0L) - SystemClock.elapsedRealtime());
+    }
+
+    public synchronized void reconcileSoftLockLeaseAfterBoot() {
+        long generation = prefs.getLong("softLockGeneration", 0L);
+        if (generation <= 0L) return;
+        if (prefs.getLong("softLockReleasedGeneration", -1L) == generation) return;
+
+        int storedBoot = prefs.getInt("softLockBootCount", -1);
+        int currentBoot = readBootCount();
+        long now = SystemClock.elapsedRealtime();
+        long end = prefs.getLong("softLockEndElapsed", 0L);
+
+        boolean bootChanged = currentBoot >= 0 && storedBoot >= 0 && currentBoot != storedBoot;
+        boolean elapsedLooksReset = end - now > DEV_SOFT_LOCK_LEASE_MS;
+        if (bootChanged || elapsedLooksReset) {
+            prefs.edit()
+                    .putLong("softLockEndElapsed", now + DEV_SOFT_LOCK_LEASE_MS)
+                    .putInt("softLockBootCount", currentBoot)
+                    .commit();
+        }
     }
 
     private int readBootCount() {
