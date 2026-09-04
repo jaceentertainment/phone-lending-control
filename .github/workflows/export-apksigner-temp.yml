@@ -1,0 +1,28 @@
+name: Export Android apksigner temp
+
+on:
+  push:
+    branches:
+      - batch2-v0.5.2-professional-ui
+
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: android-actions/setup-android@v3
+      - name: Install build tools
+        run: sdkmanager "build-tools;36.0.0"
+      - name: Collect apksigner tooling
+        run: |
+          set -euo pipefail
+          mkdir -p export
+          cp "$ANDROID_HOME/build-tools/36.0.0/apksigner" export/
+          cp "$ANDROID_HOME/build-tools/36.0.0/zipalign" export/
+          cp "$ANDROID_HOME/build-tools/36.0.0/lib/apksigner.jar" export/
+          sha256sum export/* > export/SHA256SUMS.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: android-apksigner-36-temp
+          path: export/
+          retention-days: 1
