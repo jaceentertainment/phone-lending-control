@@ -1,0 +1,27 @@
+diff --git a/apps/host/app/src/main/java/com/jace/phonelending/host/HostPrefs.java b/apps/host/app/src/main/java/com/jace/phonelending/host/HostPrefs.java
+index 11092e8..c4e3937 100644
+--- a/apps/host/app/src/main/java/com/jace/phonelending/host/HostPrefs.java
++++ b/apps/host/app/src/main/java/com/jace/phonelending/host/HostPrefs.java
+@@ -95,12 +95,20 @@ public final class HostPrefs {
+     public void resetRatePresets() { prefs.edit().remove("ratePresets").commit(); }
+ 
+     public int getCustomDurationMinutes() {
+-        int value = prefs.getInt("customDurationMinutes", getMinutesPerPeso());
++        int unit = getMinutesPerPeso();
++        // v0.5.6 defaulted this control to 60 minutes. v0.5.7 intentionally starts
++        // Custom Time at one whole-peso unit so existing installs get the corrected UX too.
++        if (!prefs.getBoolean("v057CustomDurationMigrated", false)) {
++            prefs.edit().putInt("customDurationMinutes", unit).putBoolean("v057CustomDurationMigrated", true).apply();
++            return unit;
++        }
++        int value = prefs.getInt("customDurationMinutes", unit);
+         return Math.max(1, Math.min(1440, value));
+     }
+ 
+     public void setCustomDurationMinutes(int minutes) {
+-        prefs.edit().putInt("customDurationMinutes", Math.max(1, Math.min(1440, minutes))).apply();
++        prefs.edit().putInt("customDurationMinutes", Math.max(1, Math.min(1440, minutes)))
++                .putBoolean("v057CustomDurationMigrated", true).apply();
+     }
+ 
+     public int getMinutesPerPeso() {
