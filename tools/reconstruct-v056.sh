@@ -25,7 +25,13 @@ echo '732dd1d205f622a69760a255e46b37a70ad4119d231e3b304a866ff426400048  tools/v0
 # v0.5.6 transport is intentionally split for GitHub Contents transport safety.
 # The decoded source patch hash is authoritative; base64 terminal-newline
 # normalization is semantically irrelevant and therefore is not a release gate.
+printf "v0.5.6 transport fragments as stored in GitHub:\n"
+wc -c tools/v0.5.6-professional-ux.patch.gz.b64.part-*
+sha256sum tools/v0.5.6-professional-ux.patch.gz.b64.part-*
 cat tools/v0.5.6-professional-ux.patch.gz.b64.part-* > /tmp/v056.patch.gz.b64
+printf "reconstructed wrapper: "
+wc -c /tmp/v056.patch.gz.b64
+sha256sum /tmp/v056.patch.gz.b64
 base64 -d /tmp/v056.patch.gz.b64 | gzip -d > /tmp/v056.patch
 echo 'fc5b0096f4e8c79d83e1a2ad09f47c2ba4f4fed42dd3eeffa336a6ebd10b5548  /tmp/v056.patch' | sha256sum -c -
 
