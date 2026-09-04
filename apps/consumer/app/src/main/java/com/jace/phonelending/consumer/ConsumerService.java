@@ -45,7 +45,7 @@ public class ConsumerService extends Service {
     private static final String WARNING_CHANNEL = "rental_warning";
     private static final int STATUS_NOTIFICATION = 1001;
     private static final int WARNING_NOTIFICATION = 1002;
-    private static final String CAPABILITIES = "status,start,extend,end,prepare,maintenance,relock";
+    private static final String CAPABILITIES = "status,start,extend,end,prepare,relock";
 
     private static volatile int advertisedPort = 0;
     private static volatile String advertisedServiceName = "";
@@ -55,7 +55,7 @@ public class ConsumerService extends Service {
     private final SecureRandom random = new SecureRandom();
     private SessionStore sessions;
     private PairingManager pairing;
-    private PolicyController policy;
+    private SoftLockOverlay softLock;
     private SharedPreferences replayPrefs;
     private final ArrayDeque<String> recentCommandIds = new ArrayDeque<>();
     private final Set<String> recentCommandSet = new HashSet<>();
@@ -67,7 +67,6 @@ public class ConsumerService extends Service {
     private boolean warned60;
     private boolean warned30;
     private boolean warned10;
-    private boolean lastDevUnrestricted = false;
 
     public static void start(Context context) {
         Intent i = new Intent(context, ConsumerService.class);
@@ -85,12 +84,11 @@ public class ConsumerService extends Service {
         super.onCreate();
         sessions = new SessionStore(this);
         pairing = new PairingManager(this);
-        policy = new PolicyController(this);
+        softLock = new SoftLockOverlay(this, sessions);
         replayPrefs = createDeviceProtectedStorageContext().getSharedPreferences("replay_cache_v2", MODE_PRIVATE);
         loadReplayCache();
         createChannels();
         startForeground(STATUS_NOTIFICATION, buildStatusNotification());
-        policy.grantRequiredNotificationPermissionIfPossible();
         io.execute(this::runSecureServer);
         handler.post(tick);
     }
@@ -101,6 +99,7 @@ public class ConsumerService extends Service {
     @Override
     public void onDestroy() {
         handler.removeCallbacksAndMessages(null);
+        if (softLock != null) softLock.hide();
         unregisterNsd();
         try { if (serverSocket != null) serverSocket.close(); } catch (Exception ignored) {}
         advertisedPort = 0;
@@ -112,39 +111,26 @@ public class ConsumerService extends Service {
     private final Runnable tick = new Runnable() {
         @Override public void run() {
             try {
-                if (policy.isDeviceOwner()) sessions.initializeProvisioned();
                 sessions.reconcileMaintenance();
-                String stateBefore = sessions.getState();
-                boolean expired = sessions.expireIfNeeded();
+                sessions.expireIfNeeded();
+                sessions.reconcileSoftLockLeaseAfterBoot();
                 String state = sessions.getState();
 
-                if (expired || (!state.equals(stateBefore) && isRestricted(state))) {
-                    policy.applyRestrictedAndBringToFront();
-                } else if (isRestricted(state)) {
-                    policy.applyLockedHome();
-                } else if (SessionStore.ACTIVE.equals(state)) {
-                    policy.clearLockedHome();
-                } else if (SessionStore.ADMIN_MAINTENANCE.equals(state)) {
-                    boolean unrestricted = sessions.isDevUnrestricted();
-                    if (unrestricted) {
-                        policy.clearLockedHome();
-                    } else {
-                        policy.applyLockedHome();
-                        if (lastDevUnrestricted || !SessionStore.ADMIN_MAINTENANCE.equals(stateBefore)) {
-                            policy.applyRestrictedAndBringToFront();
-                        }
-                    }
-                    lastDevUnrestricted = unrestricted;
-                } else {
-                    lastDevUnrestricted = false;
-                }
+                boolean shouldShowSoftLock = isRestricted(state)
+                        && pairing.isPaired()
+                        && sessions.softLockLeaseActive()
+                        && SoftLockOverlay.hasPermission(ConsumerService.this);
+                if (shouldShowSoftLock) softLock.show(state, pairing.getDeviceId());
+                else softLock.hide();
 
                 handleWarnings(state);
                 NotificationManager nm = (NotificationManager) getSystemService(NOTIFICATION_SERVICE);
                 nm.notify(STATUS_NOTIFICATION, buildStatusNotification());
             } catch (Throwable t) {
                 sessions.markRecoveryLocked("service_tick_failure");
-                policy.applyRestrictedAndBringToFront();
+                if (pairing.isPaired() && SoftLockOverlay.hasPermission(ConsumerService.this)) {
+                    softLock.show(SessionStore.RECOVERY_LOCKED, pairing.getDeviceId());
+                }
             }
             handler.postDelayed(this, 1000L);
         }
@@ -197,9 +183,9 @@ public class ConsumerService extends Service {
         } else if (SessionStore.ADMIN_MAINTENANCE.equals(state)) {
             b.setContentText("Owner maintenance active — " + formatDuration(sessions.maintenanceRemainingSeconds()));
         } else if (SessionStore.UNPROVISIONED.equals(state)) {
-            b.setContentText("Business provisioning required");
+            b.setContentText("Rental setup required");
         } else {
-            b.setContentText("Rental device locked — " + state);
+            b.setContentText("Rental state — " + state);
         }
         return b.build();
     }
@@ -342,7 +328,7 @@ public class ConsumerService extends Service {
     }
 
     private JSONObject processPair(JSONObject request) throws Exception {
-        if (!policy.isDeviceOwner()) return error("not_provisioned");
+        if (SessionStore.UNPROVISIONED.equals(sessions.getState())) return error("setup_required");
         if (SessionStore.ACTIVE.equals(sessions.getState())) return error("pairing_not_allowed_active");
 
         int protocol = request.optInt("protocol", 0);
@@ -379,7 +365,7 @@ public class ConsumerService extends Service {
         ack.put("capabilities", CAPABILITIES);
         ack.put("consumerPublicKey", publicKey);
         ack.put("signature", ackSignature);
-        handler.post(() -> policy.applyRestrictedAndBringToFront());
+        if (SessionStore.AVAILABLE_LOCKED.equals(state)) sessions.armSoftLockLease();
         return ack;
     }
 
@@ -425,7 +411,7 @@ public class ConsumerService extends Service {
                 long seconds = parsePositive(payload, 24 * 3600L);
                 if (seconds <= 0) return false;
                 sessions.startSession(seconds);
-                policy.applyActiveAndOpenHome();
+                softLock.hide();
                 return true;
             }
             case "EXTEND": {
@@ -438,22 +424,18 @@ public class ConsumerService extends Service {
             case "END":
                 if (!SessionStore.ACTIVE.equals(state)) return false;
                 sessions.endSession();
-                policy.applyRestrictedAndBringToFront();
                 return true;
             case "PREPARE":
                 if (!SessionStore.EXPIRED_LOCKED.equals(state)) return false;
                 sessions.prepareAvailable();
-                policy.applyRestrictedAndBringToFront();
                 return true;
             case "MAINTENANCE":
-                if (SessionStore.ACTIVE.equals(state)) return false;
-                sessions.enterMaintenance(600L);
-                policy.applyRestrictedAndBringToFront();
-                return true;
+                return false;
             case "RELOCK":
-                if (!SessionStore.ADMIN_MAINTENANCE.equals(state)) return false;
-                sessions.exitMaintenance();
-                policy.applyRestrictedAndBringToFront();
+                if (SessionStore.ADMIN_MAINTENANCE.equals(state)) sessions.exitMaintenance();
+                state = sessions.getState();
+                if (!isRestricted(state) || !pairing.isPaired()) return false;
+                sessions.armSoftLockLease();
                 return true;
             default:
                 return false;
