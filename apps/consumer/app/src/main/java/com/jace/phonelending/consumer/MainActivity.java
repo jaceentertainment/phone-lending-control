@@ -3,35 +3,35 @@ package com.jace.phonelending.consumer;
 import android.Manifest;
 import android.app.Activity;
 import android.content.Intent;
-import android.content.pm.ApplicationInfo;
 import android.content.pm.PackageManager;
 import android.graphics.Typeface;
+import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
+import android.provider.Settings;
 import android.view.Gravity;
-import android.view.View;
 import android.view.ViewGroup;
 import android.widget.Button;
+import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.TextView;
 
+import java.util.List;
 import java.util.Locale;
 
 public class MainActivity extends Activity {
     private final Handler handler = new Handler(Looper.getMainLooper());
     private SessionStore sessions;
     private PairingManager pairing;
-    private PolicyController policy;
     private LinearLayout root;
 
     @Override protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         sessions = new SessionStore(this);
         pairing = new PairingManager(this);
-        policy = new PolicyController(this);
         ConsumerService.start(this);
         requestNotificationPermissionIfNeeded();
         render();
@@ -43,102 +43,130 @@ public class MainActivity extends Activity {
 
     private final Runnable uiTick = new Runnable() {
         @Override public void run() {
-            if (policy.isDeviceOwner()) {
-                sessions.initializeProvisioned();
-                sessions.reconcileMaintenance();
-                sessions.expireIfNeeded();
-                if (!SessionStore.ACTIVE.equals(sessions.getState())) {
-                    openRestricted();
-                    return;
-                }
-                renderActive();
-            }
+            sessions.reconcileMaintenance();
+            sessions.expireIfNeeded();
+            render();
             handler.postDelayed(this, 1000L);
         }
     };
 
     void render() {
-        if (!policy.isDeviceOwner()) {
-            sessions.setState(SessionStore.UNPROVISIONED);
-            renderUnprovisioned();
+        if (!SoftLockOverlay.hasPermission(this)) {
+            renderSetupRequired();
             return;
         }
-        sessions.initializeProvisioned();
+
+        sessions.initializeDevelopment();
         sessions.expireIfNeeded();
-        if (!SessionStore.ACTIVE.equals(sessions.getState())) {
-            openRestricted();
+
+        if (!pairing.isPaired()) {
+            renderPairing();
             return;
         }
-        renderActive();
+
+        String state = sessions.getState();
+        if (SessionStore.ACTIVE.equals(state)) renderActive();
+        else if (SessionStore.AVAILABLE_LOCKED.equals(state)) renderReady();
+        else if (SessionStore.EXPIRED_LOCKED.equals(state)) renderExpired();
+        else renderNeedsAttention();
     }
 
-    private void renderUnprovisioned() {
-        policy.clearLockedHome();
+    private void renderSetupRequired() {
         page();
         title("PhoneLending Rental");
-        warning(isDebuggable() ? "DEVELOPMENT DEVICE — NOT FOR CUSTOMER RENTAL" : "BUSINESS SETUP REQUIRED");
-        section("DEVICE SETUP REQUIRED");
-        body("The app is installed, but this phone is not yet under PhoneLending management. Installation alone does not lock the phone.");
+        warning("SETUP REQUIRED");
+        body("Allow PhoneLending to display the development rental lock over other apps.");
+        button("ALLOW LOCK SCREEN", v -> {
+            Intent i = new Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                    Uri.parse("package:" + getPackageName()));
+            startActivity(i);
+        });
         labelValue("Device", pairing.getDeviceId());
-        labelValue("Management", "NOT CONFIGURED");
-        labelValue("Host pairing", "DISABLED UNTIL MANAGEMENT IS ACTIVE");
-        body("An authorized owner/technician must provision this business-owned phone as Device Owner before Host pairing becomes available.");
-        invokeDebugUnprovisionedHook();
-        button("REFRESH SETUP STATUS", v -> render());
-        buildFooter();
+        developmentFooter();
+    }
+
+    private void renderPairing() {
+        page();
+        title("PhoneLending Rental");
+        warning("PAIR WITH HOST");
+
+        int port = ConsumerService.advertisedPort();
+        String service = ConsumerService.advertisedServiceName();
+        if (port <= 0 || service.isEmpty()) {
+            section("Preparing pairing...");
+            body("Keep both phones on the same local network. The QR code will appear automatically.");
+        } else {
+            List<String> hints = NetworkUtils.localEndpointHints(port);
+            String payload = pairing.buildPairingUri(service, hints);
+            try {
+                ImageView qr = new ImageView(this);
+                int size = dp(280);
+                qr.setImageBitmap(QrCodeRenderer.render(payload, size));
+                qr.setAdjustViewBounds(true);
+                root.addView(qr, new LinearLayout.LayoutParams(size, size));
+            } catch (Exception e) {
+                warning("QR generation failed");
+            }
+            body("Scan this QR using PhoneLending Host.");
+            labelValue("QR expires in", formatDuration(pairing.pairingSessionRemainingSeconds()));
+        }
+        labelValue("Device", pairing.getDeviceId());
+        body("Waiting for Host...");
+        developmentFooter();
+    }
+
+    private void renderReady() {
+        page();
+        title("PhoneLending Rental");
+        success("READY");
+        bigTime("00:00:00");
+        body("This phone is ready for the operator to start a rental.");
+        labelValue("Device", pairing.getDeviceId());
+        labelValue("Host", "CONNECTED");
+        developmentFooter();
     }
 
     private void renderActive() {
-        policy.clearLockedHome();
         page();
         title("PhoneLending Rental");
-        section("TIME REMAINING");
+        success("RENTAL ACTIVE");
         bigTime(formatDuration(sessions.remainingSeconds()));
-        success("SESSION ACTIVE");
-        body("Your rental is active. The Consumer on this phone owns the authoritative timer and will continue counting down even if the Host is offline.");
+        body("remaining");
+        button("RETURN TO PHONE", v -> finish());
         labelValue("Device", pairing.getDeviceId());
-        labelValue("Host", pairing.isPaired() ? "PAIRED" : "NOT PAIRED");
-        button("RETURN TO PHONE", v -> policy.applyActiveAndOpenHome());
-        buildFooter();
+        developmentFooter();
     }
 
-    private void openRestricted() {
-        policy.applyLockedHome();
-        Intent i = new Intent(this, RestrictedActivity.class);
-        i.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_SINGLE_TOP);
-        startActivity(i);
-        finish();
+    private void renderExpired() {
+        page();
+        title("PhoneLending Rental");
+        warning("RENTAL TIME EXPIRED");
+        bigTime("00:00:00");
+        body("Please return this phone to the rental operator.");
+        labelValue("Device", pairing.getDeviceId());
+        developmentFooter();
+    }
+
+    private void renderNeedsAttention() {
+        page();
+        title("PhoneLending Rental");
+        warning("NEEDS OWNER ATTENTION");
+        body("Rental access is unavailable. Please return this phone to the operator.");
+        labelValue("Device", pairing.getDeviceId());
+        developmentFooter();
     }
 
     private void requestNotificationPermissionIfNeeded() {
-        policy.grantRequiredNotificationPermissionIfPossible();
         if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED)
             requestPermissions(new String[]{Manifest.permission.POST_NOTIFICATIONS}, 7001);
     }
 
-    private void invokeDebugUnprovisionedHook() {
-        if (!isDebuggable()) return;
-        try {
-            Class<?> clazz = Class.forName("com.jace.phonelending.consumer.DebugRecoveryHooks");
-            clazz.getMethod("augmentUnprovisioned", MainActivity.class).invoke(null, this);
-        } catch (Throwable ignored) {}
-    }
-
-    private void buildFooter() {
-        TextView footer = text("Build " + versionName(), 13, Typeface.NORMAL);
+    private void developmentFooter() {
+        TextView footer = text("DEVELOPMENT BUILD  ·  Build " + versionName(), 13, Typeface.BOLD);
         footer.setGravity(Gravity.CENTER);
         footer.setPadding(0, dp(28), 0, dp(10));
         root.addView(footer, matchWrap());
     }
-
-    SessionStore sessions() { return sessions; }
-    PairingManager pairing() { return pairing; }
-    PolicyController policy() { return policy; }
-    void debugLabelValue(String label, String value) { labelValue(label, value); }
-    void debugBody(String value) { body(value); }
-    void debugWarning(String value) { warning(value); }
-    void debugMono(String value) { mono(value); }
-    Button debugButton(String label, View.OnClickListener listener) { return button(label, listener); }
 
     private void page() {
         ScrollView scroll = new ScrollView(this);
@@ -153,16 +181,14 @@ public class MainActivity extends Activity {
     private void title(String value) { TextView t=text(value,24,Typeface.BOLD); t.setGravity(Gravity.CENTER); t.setPadding(0,0,0,dp(14)); root.addView(t); }
     private void section(String value) { TextView t=text(value,16,Typeface.BOLD); t.setGravity(Gravity.CENTER); t.setPadding(0,dp(8),0,dp(8)); root.addView(t); }
     private void warning(String value) { TextView t=text(value,18,Typeface.BOLD); t.setGravity(Gravity.CENTER); t.setPadding(dp(12),dp(12),dp(12),dp(12)); root.addView(t,matchWrap()); }
-    private void success(String value) { TextView t=text(value,20,Typeface.BOLD); t.setGravity(Gravity.CENTER); t.setPadding(0,dp(8),0,dp(8)); root.addView(t); }
+    private void success(String value) { TextView t=text(value,22,Typeface.BOLD); t.setGravity(Gravity.CENTER); t.setPadding(0,dp(12),0,dp(12)); root.addView(t); }
     private void bigTime(String value) { TextView t=text(value,46,Typeface.BOLD); t.setGravity(Gravity.CENTER); t.setPadding(0,dp(6),0,dp(14)); root.addView(t); }
     private void body(String value) { TextView t=text(value,16,Typeface.NORMAL); t.setGravity(Gravity.CENTER); t.setPadding(0,dp(8),0,dp(12)); root.addView(t); }
     private void labelValue(String label,String value) { TextView t=text(label+":  "+value,15,Typeface.NORMAL); t.setPadding(0,dp(5),0,dp(5)); root.addView(t,matchWrap()); }
-    private void mono(String value) { TextView t=text(value,13,Typeface.NORMAL); t.setTypeface(Typeface.MONOSPACE); t.setTextIsSelectable(true); t.setPadding(dp(10),dp(10),dp(10),dp(10)); root.addView(t,matchWrap()); }
-    private Button button(String label,View.OnClickListener listener) { Button b=new Button(this); b.setText(label); b.setAllCaps(false); b.setTextSize(15); b.setOnClickListener(listener); LinearLayout.LayoutParams lp=new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,dp(52)); lp.setMargins(0,dp(7),0,dp(7)); root.addView(b,lp); return b; }
+    private Button button(String label,android.view.View.OnClickListener listener) { Button b=new Button(this); b.setText(label); b.setAllCaps(false); b.setTextSize(15); b.setOnClickListener(listener); LinearLayout.LayoutParams lp=new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,dp(52)); lp.setMargins(0,dp(7),0,dp(7)); root.addView(b,lp); return b; }
     private TextView text(String value,int sizeSp,int style) { TextView t=new TextView(this); t.setText(value); t.setTextSize(sizeSp); t.setTextColor(0xFF111111); t.setTypeface(Typeface.DEFAULT,style); return t; }
     private LinearLayout.LayoutParams matchWrap() { return new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,ViewGroup.LayoutParams.WRAP_CONTENT); }
     private int dp(int value) { return Math.round(value*getResources().getDisplayMetrics().density); }
     private static String formatDuration(long totalSeconds) { long h=totalSeconds/3600,m=(totalSeconds%3600)/60,s=totalSeconds%60; return String.format(Locale.US,"%02d:%02d:%02d",h,m,s); }
     private String versionName() { try { return getPackageManager().getPackageInfo(getPackageName(),0).versionName; } catch(Exception e) { return "unknown"; } }
-    private boolean isDebuggable() { return (getApplicationInfo().flags & ApplicationInfo.FLAG_DEBUGGABLE) != 0; }
 }
