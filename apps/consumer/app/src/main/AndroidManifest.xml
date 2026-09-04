@@ -10,6 +10,7 @@
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <uses-permission android:name="android.permission.VIBRATE" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
 
     <application
         android:allowBackup="false"
@@ -21,19 +22,8 @@
         android:usesCleartextTraffic="false"
         android:directBootAware="true">
 
-        <receiver
-            android:name=".AdminReceiver"
-            android:description="@string/admin_description"
-            android:exported="true"
-            android:label="PhoneLending Device Admin"
-            android:permission="android.permission.BIND_DEVICE_ADMIN">
-            <meta-data
-                android:name="android.app.device_admin"
-                android:resource="@xml/device_admin_receiver" />
-            <intent-filter>
-                <action android:name="android.app.action.DEVICE_ADMIN_ENABLED" />
-            </intent-filter>
-        </receiver>
+        <!-- v0.5.0 light-lock development branch intentionally does NOT declare
+             Device Owner/admin provisioning components or a persistent HOME app. -->
 
         <receiver
             android:name=".BootReceiver"
@@ -54,43 +44,8 @@
             android:foregroundServiceType="specialUse">
             <property
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
-                android:value="business-owned rental timer, authenticated local management transport, and managed-device state reconciliation" />
+                android:value="business-owned rental timer, authenticated local management transport, and development soft-lock presentation" />
         </service>
-
-        <activity
-            android:name=".GetProvisioningModeActivity"
-            android:exported="true"
-            android:permission="android.permission.BIND_DEVICE_ADMIN">
-            <intent-filter>
-                <action android:name="android.app.action.GET_PROVISIONING_MODE" />
-                <category android:name="android.intent.category.DEFAULT" />
-            </intent-filter>
-        </activity>
-
-        <activity
-            android:name=".PolicyComplianceActivity"
-            android:exported="true"
-            android:permission="android.permission.BIND_DEVICE_ADMIN">
-            <intent-filter>
-                <action android:name="android.app.action.ADMIN_POLICY_COMPLIANCE" />
-                <category android:name="android.intent.category.DEFAULT" />
-            </intent-filter>
-        </activity>
-
-        <activity
-            android:name=".RestrictedActivity"
-            android:directBootAware="true"
-            android:excludeFromRecents="true"
-            android:exported="true"
-            android:launchMode="singleTask"
-            android:lockTaskMode="if_whitelisted"
-            android:screenOrientation="portrait">
-            <intent-filter>
-                <action android:name="android.intent.action.MAIN" />
-                <category android:name="android.intent.category.HOME" />
-                <category android:name="android.intent.category.DEFAULT" />
-            </intent-filter>
-        </activity>
 
         <activity
             android:name=".MainActivity"
