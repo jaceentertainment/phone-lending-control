@@ -1,0 +1,163 @@
+name: PhoneLending v0.5.3 Timer Qualification Build
+
+on:
+  push:
+    branches:
+      - batch3-v0.5.3-timer-qualification
+  workflow_dispatch:
+
+jobs:
+  compile_and_validate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Reconstruct validated v0.5.2 and v0.5.3 patches
+        run: |
+          set -euo pipefail
+          cat \
+            tools/v0.5.2-professional-ui.patch.gz.b64.part-00 \
+            tools/v0.5.2-professional-ui.patch.gz.b64.part-01 \
+            tools/v0.5.2-professional-ui.patch.gz.b64.part-02 \
+            tools/v0.5.2-professional-ui.patch.gz.b64.part-03 \
+            tools/v0.5.2-professional-ui.patch.gz.b64.part-04 \
+            tools/v0.5.2-professional-ui.patch.gz.b64.part-05 \
+            > /tmp/v052.patch.gz.b64
+          echo '025bee9ee89255810ff313b25c6f7e64649727b73336e757b3023a03f18989ae  /tmp/v052.patch.gz.b64' | sha256sum -c -
+          base64 -d /tmp/v052.patch.gz.b64 | gzip -d > /tmp/v052.patch
+          echo 'baa3b11b1af7e00f43540b0c1975f90e9a6f6f320984da72ec7a5022dbf5573c  /tmp/v052.patch' | sha256sum -c -
+
+          echo 'df6be5fff538a352a95d24510da6c17510d82a8ca691a7c93a55d65545088d31  tools/v0.5.3-timer-qualification.patch.gz.b64' | sha256sum -c -
+          base64 -d tools/v0.5.3-timer-qualification.patch.gz.b64 | gzip -d > /tmp/v053.patch
+          echo '846c8488c0e7c1bf7a99e17ca741622281b733a54f7fc318b2eec8425269245c  /tmp/v053.patch' | sha256sum -c -
+
+      - name: Apply proven baseline then timer qualification delta
+        run: |
+          set -euo pipefail
+          base64 -d tools/v0.5.1-guided-onboarding.patch.gz.b64 | gzip -d > /tmp/v051.patch
+          git apply --check tools/v0.5.0-consumer-service.patch
+          git apply tools/v0.5.0-consumer-service.patch
+          git apply --check tools/v0.5.0-host-main.patch
+          git apply tools/v0.5.0-host-main.patch
+          git apply --check /tmp/v051.patch
+          git apply /tmp/v051.patch
+          git apply --check /tmp/v052.patch
+          git apply /tmp/v052.patch
+          git apply --check /tmp/v053.patch
+          git apply /tmp/v053.patch
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android 16 SDK
+        run: sdkmanager "platform-tools" "platforms;android-36" "build-tools;36.0.0"
+
+      - name: Set up Gradle 8.13
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.13'
+
+      - name: Compile Host and Rental qualification build
+        run: gradle --no-daemon :host:assembleDebug :consumer:assembleFieldTest
+
+      - name: Verify v0.5.3 contract and qualification boundaries
+        run: |
+          set -euo pipefail
+          AAPT2="$ANDROID_HOME/build-tools/36.0.0/aapt2"
+          HOST_APK="$(find apps/host/app/build/outputs/apk/debug -maxdepth 1 -type f -name '*.apk' | head -n 1)"
+          RENTAL_APK="$(find apps/consumer/app/build/outputs/apk/fieldTest -maxdepth 1 -type f -name '*.apk' | head -n 1)"
+
+          test "$($AAPT2 dump packagename "$HOST_APK")" = 'com.jace.phonelending.host.dev'
+          test "$($AAPT2 dump packagename "$RENTAL_APK")" = 'com.jace.phonelending.consumer.field'
+          $AAPT2 dump badging "$HOST_APK" | grep -q "versionCode='7' versionName='0.5.3-dev'"
+          $AAPT2 dump badging "$RENTAL_APK" | grep -q "versionCode='9' versionName='0.5.3-field'"
+
+          MANIFEST="$($AAPT2 dump xmltree "$RENTAL_APK" --file AndroidManifest.xml)"
+          if echo "$MANIFEST" | grep 'android:testOnly' | grep -qE '0xffffffff|true'; then
+            echo 'ERROR: Rental field APK is testOnly=true'
+            exit 1
+          fi
+
+          test -f contracts/PhoneLending_Timer_Qualification_Addendum_v0.5.3.md
+          grep -q 'isTimerQualificationBuild' apps/consumer/app/src/main/java/com/jace/phonelending/consumer/PolicyController.java
+          grep -q 'isPairingReady' apps/consumer/app/src/main/java/com/jace/phonelending/consumer/PolicyController.java
+          grep -q 'timer_qualification,enforcement_unqualified' apps/consumer/app/src/main/java/com/jace/phonelending/consumer/ConsumerService.java
+          grep -q 'timer_qualification_only_enforcement_unqualified' apps/consumer/app/src/main/java/com/jace/phonelending/consumer/ConsumerService.java
+          grep -q 'policy.isSoftLockBuild() && !policy.isTimerQualificationBuild()' apps/consumer/app/src/main/java/com/jace/phonelending/consumer/ConsumerService.java
+          grep -q 'LOCK ENFORCEMENT NOT QUALIFIED' apps/consumer/app/src/main/java/com/jace/phonelending/consumer/MainActivity.java
+          grep -q 'PHYSICAL LOCK NOT QUALIFIED' apps/consumer/app/src/main/java/com/jace/phonelending/consumer/MainActivity.java
+          grep -q 'TIMER QUALIFICATION BUILD' apps/host/app/src/main/java/com/jace/phonelending/host/MainActivity.java
+          grep -q 'updateDashboardClockFields' apps/host/app/src/main/java/com/jace/phonelending/host/MainActivity.java
+
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+          s=Path('apps/consumer/app/src/main/java/com/jace/phonelending/consumer/SessionStore.java').read_text()
+          found=re.findall(r'public static final String ([A-Z_]+) = "([A-Z_]+)";', s)
+          states=[name for name,value in found if name==value and name in {
+              'UNPROVISIONED','AVAILABLE_LOCKED','ACTIVE','EXPIRED_LOCKED','ADMIN_MAINTENANCE','RECOVERY_LOCKED'}]
+          assert sorted(states)==sorted(['UNPROVISIONED','AVAILABLE_LOCKED','ACTIVE','EXPIRED_LOCKED','ADMIN_MAINTENANCE','RECOVERY_LOCKED']), states
+          assert len(states)==6, states
+          PY
+
+          rm -rf /tmp/rental-dex && mkdir -p /tmp/rental-dex
+          unzip -j "$RENTAL_APK" 'classes*.dex' -d /tmp/rental-dex >/dev/null
+          grep -a -q 'timer_qualification' /tmp/rental-dex/classes*.dex
+          grep -a -q 'enforcement_unqualified' /tmp/rental-dex/classes*.dex
+          grep -a -q 'LOCK ENFORCEMENT NOT QUALIFIED' /tmp/rental-dex/classes*.dex
+
+          echo 'PASS: v0.5.3 preserves v0.5.2 Host presentation and signed protocol while exposing a bounded timer/pairing qualification lane with physical enforcement explicitly unqualified.'
+
+      - name: Verify compile APKs are unsigned
+        run: |
+          set -euo pipefail
+          HOST_APK="$(find apps/host/app/build/outputs/apk/debug -maxdepth 1 -type f -name '*.apk' | head -n 1)"
+          RENTAL_APK="$(find apps/consumer/app/build/outputs/apk/fieldTest -maxdepth 1 -type f -name '*.apk' | head -n 1)"
+          for apk in "$HOST_APK" "$RENTAL_APK"; do
+            if apksigner verify "$apk" >/dev/null 2>&1; then
+              echo "ERROR: compile artifact unexpectedly signed: $apk"
+              exit 1
+            fi
+          done
+
+      - name: Collect unsigned APKs
+        run: |
+          set -euo pipefail
+          mkdir -p unsigned-dist
+          HOST_APK="$(find apps/host/app/build/outputs/apk/debug -maxdepth 1 -type f -name '*.apk' | head -n 1)"
+          RENTAL_APK="$(find apps/consumer/app/build/outputs/apk/fieldTest -maxdepth 1 -type f -name '*.apk' | head -n 1)"
+          cp "$HOST_APK" unsigned-dist/PhoneLending-Host-v0.5.3-vc7-UNSIGNED.apk
+          cp "$RENTAL_APK" unsigned-dist/PhoneLending-Rental-v0.5.3-vc9-field-UNSIGNED.apk
+          sha256sum unsigned-dist/*.apk > unsigned-dist/SHA256SUMS.txt
+
+      - name: Upload unsigned APKs
+        uses: actions/upload-artifact@v4
+        with:
+          name: phonelending-v0.5.3-timer-qualification-unsigned
+          path: unsigned-dist/
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Package applied source snapshot
+        run: |
+          set -euo pipefail
+          mkdir -p source-dist/PhoneLending-Control-v0.5.3-source
+          rsync -a --exclude '.git/' --exclude '**/build/' --exclude '.gradle/' --exclude 'source-dist/' --exclude 'unsigned-dist/' ./ source-dist/PhoneLending-Control-v0.5.3-source/
+          printf '%s\n' '${{ github.sha }}' > source-dist/PhoneLending-Control-v0.5.3-source/SOURCE_BRANCH_COMMIT.txt
+          printf '%s\n' 'v0.5.0 base patches, v0.5.1 guided onboarding, v0.5.2 professional UI, then v0.5.3 timer qualification delta were applied in order.' > source-dist/PhoneLending-Control-v0.5.3-source/PATCH_APPLICATION_NOTE.txt
+          find source-dist/PhoneLending-Control-v0.5.3-source -type f -print0 | sort -z | xargs -0 sha256sum > source-dist/SOURCE_SHA256SUMS.txt
+
+      - name: Upload source snapshot
+        uses: actions/upload-artifact@v4
+        with:
+          name: phonelending-v0.5.3-timer-qualification-source
+          path: source-dist/
+          if-no-files-found: error
+          retention-days: 14
