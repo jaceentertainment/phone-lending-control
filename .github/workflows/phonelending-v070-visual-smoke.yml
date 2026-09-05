@@ -79,20 +79,52 @@ jobs:
             adb install -r out/visual/PhoneLending-Host-v0.7.0-visual-smoke.apk
             adb shell am force-stop com.jace.phonelending.host.dev
             adb shell monkey -p com.jace.phonelending.host.dev -c android.intent.category.LAUNCHER 1 >/dev/null
-            sleep 3
+
+            for i in $(seq 1 30); do
+              adb shell uiautomator dump /sdcard/wait.xml >/dev/null 2>&1 || true
+              adb shell cat /sdcard/wait.xml 2>/dev/null | grep -q 'Secure operator access' && break
+              sleep 1
+            done
+            adb shell cat /sdcard/wait.xml 2>/dev/null | grep -q 'Secure operator access'
+            adb exec-out screencap -p > out/visual/00-first-run-setup.png
+
+            adb shell input tap 540 800
+            adb shell input keyevent 9 11 13 15 8 10
+            adb shell input keyevent 61
+            adb shell input keyevent 9 11 13 15 8 10
+            adb shell input keyevent 4
+            adb shell input tap 540 1125
+
+            for i in $(seq 1 20); do
+              adb shell uiautomator dump /sdcard/wait.xml >/dev/null 2>&1 || true
+              adb shell cat /sdcard/wait.xml 2>/dev/null | grep -q 'Operator access' && break
+              sleep 1
+            done
+            adb shell cat /sdcard/wait.xml 2>/dev/null | grep -q 'Operator access'
+            adb exec-out screencap -p > out/visual/00-operator-unlock.png
+
+            adb shell input tap 540 760
+            adb shell input keyevent 9 11 13 15 8 10
+            adb shell input keyevent 4
+            adb shell input tap 540 950
+
+            for i in $(seq 1 30); do
+              adb shell uiautomator dump /sdcard/wait.xml >/dev/null 2>&1 || true
+              adb shell cat /sdcard/wait.xml 2>/dev/null | grep -q 'Pair Rental Phone' && break
+              sleep 1
+            done
+            adb shell cat /sdcard/wait.xml 2>/dev/null | grep -q 'Pair Rental Phone'
 
             adb exec-out screencap -p > out/visual/01-dashboard.png
             adb shell uiautomator dump /sdcard/dashboard.xml >/dev/null || true
             adb pull /sdcard/dashboard.xml out/visual/01-dashboard.xml >/dev/null || true
 
-            # Owner Design Master: Settings is the left pager page; Dashboard is the right/root page.
             adb shell input swipe 180 1200 900 1200 500
             sleep 2
             adb exec-out screencap -p > out/visual/02-settings.png
             adb shell uiautomator dump /sdcard/settings.xml >/dev/null || true
             adb pull /sdcard/settings.xml out/visual/02-settings.xml >/dev/null || true
 
-            # Return to Dashboard and prove the pager settles back to the root page.
             adb shell input swipe 900 1200 180 1200 500
             sleep 2
             adb exec-out screencap -p > out/visual/03-dashboard-return.png
