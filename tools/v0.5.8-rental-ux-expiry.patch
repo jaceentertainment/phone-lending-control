@@ -1,0 +1,204 @@
+diff --git a/apps/consumer/app/build.gradle b/apps/consumer/app/build.gradle
+index 4815f39..16a09ba 100644
+--- a/apps/consumer/app/build.gradle
++++ b/apps/consumer/app/build.gradle
+@@ -16,8 +16,8 @@ android {
+         applicationId 'com.jace.phonelending.consumer'
+         minSdk 28
+         targetSdk 36
+-        versionCode 12
+-        versionName '0.5.6'
++        versionCode 13
++        versionName '0.5.8'
+     }
+ 
+     signingConfigs {
+diff --git a/apps/consumer/app/src/main/java/com/jace/phonelending/consumer/ConsumerService.java b/apps/consumer/app/src/main/java/com/jace/phonelending/consumer/ConsumerService.java
+index 888c4a2..a3d7661 100644
+--- a/apps/consumer/app/src/main/java/com/jace/phonelending/consumer/ConsumerService.java
++++ b/apps/consumer/app/src/main/java/com/jace/phonelending/consumer/ConsumerService.java
+@@ -74,6 +74,7 @@ public class ConsumerService extends Service {
+     private boolean warned60;
+     private String lastNotificationState = "";
+     private long lastNotificationEndEpoch = Long.MIN_VALUE;
++    private long nextStatusNotificationHealthCheckElapsed = 0L;
+     private boolean lastDevUnrestricted = false;
+     private DevelopmentSoftLock softLock;
+ 
+@@ -162,6 +163,7 @@ public class ConsumerService extends Service {
+                 sessions.reconcileMaintenance();
+                 boolean expired = sessions.expireIfNeeded();
+                 String state = sessions.getState();
++                boolean requestExpiryUiHandoff = expired && policy.isTimerQualificationBuild();
+ 
+                 if (expired) {
+                     DiagnosticReporter.event("SESSION_EXPIRED", "authoritative remaining=0");
+@@ -201,11 +203,23 @@ public class ConsumerService extends Service {
+ 
+                 handleWarnings(state);
+                 long notificationEnd = SessionStore.ACTIVE.equals(state) ? sessions.getEndEpoch() : 0L;
+-                if (!state.equals(lastNotificationState) || notificationEnd != lastNotificationEndEpoch) {
++                long nowElapsed = SystemClock.elapsedRealtime();
++                boolean healthCheckDue = nowElapsed >= nextStatusNotificationHealthCheckElapsed;
++                boolean activeStatusMissing = false;
++                if (healthCheckDue) {
++                    nextStatusNotificationHealthCheckElapsed = nowElapsed + 5000L;
++                    activeStatusMissing = SessionStore.ACTIVE.equals(state) && !statusNotificationPresent();
++                }
++                if (!state.equals(lastNotificationState) || notificationEnd != lastNotificationEndEpoch || activeStatusMissing) {
+                     NotificationManager nm = (NotificationManager) getSystemService(NOTIFICATION_SERVICE);
+                     nm.notify(STATUS_NOTIFICATION, buildStatusNotification());
+                     lastNotificationState = state;
+                     lastNotificationEndEpoch = notificationEnd;
++                    if (activeStatusMissing) DiagnosticReporter.event("TIMER_NOTIFICATION_RESTORED", "active rental status notification was missing");
++                }
++                if (requestExpiryUiHandoff) {
++                    // Presentation follows authoritative expiry. This is intentionally one-shot.
++                    policy.bringRentalStatusToFrontBestEffort();
+                 }
+             } catch (Throwable t) {
+                 sessions.markRecoveryLocked("service_tick_failure");
+@@ -255,7 +269,7 @@ public class ConsumerService extends Service {
+                 : new Notification.Builder(this);
+         b.setSmallIcon(android.R.drawable.ic_lock_idle_alarm)
+                 .setContentIntent(pi)
+-                .setOngoing(true)
++                .setOngoing(SessionStore.ACTIVE.equals(state))
+                 .setOnlyAlertOnce(true)
+                 .setVisibility(Notification.VISIBILITY_PUBLIC)
+                 .setCategory(Notification.CATEGORY_SERVICE);
+@@ -294,6 +308,17 @@ public class ConsumerService extends Service {
+         return b.build();
+     }
+ 
++    private boolean statusNotificationPresent() {
++        if (Build.VERSION.SDK_INT < 23) return true;
++        try {
++            NotificationManager nm = (NotificationManager) getSystemService(NOTIFICATION_SERVICE);
++            for (android.service.notification.StatusBarNotification item : nm.getActiveNotifications()) {
++                if (item.getId() == STATUS_NOTIFICATION) return true;
++            }
++        } catch (Throwable ignored) {}
++        return false;
++    }
++
+     private void handleWarnings(String state) {
+         if (!SessionStore.ACTIVE.equals(state)) {
+             warningSession = "";
+diff --git a/apps/consumer/app/src/main/java/com/jace/phonelending/consumer/MainActivity.java b/apps/consumer/app/src/main/java/com/jace/phonelending/consumer/MainActivity.java
+index 8444ba5..aff7090 100644
+--- a/apps/consumer/app/src/main/java/com/jace/phonelending/consumer/MainActivity.java
++++ b/apps/consumer/app/src/main/java/com/jace/phonelending/consumer/MainActivity.java
+@@ -321,6 +321,7 @@ public class MainActivity extends Activity {
+         renderedMode = "ready";
+         page();
+         brandHeader("Rental");
++        addVerticalFlexSpacer();
+ 
+         LinearLayout card = heroCard();
+         heroSymbol(card, "✓", R.color.pl_success_container, R.color.pl_success);
+@@ -331,6 +332,7 @@ public class MainActivity extends Activity {
+             friendlyTestBuildNotice();
+         renderNotificationAccessHint();
+ 
++        addVerticalFlexSpacer();
+         footer();
+     }
+ 
+@@ -338,6 +340,7 @@ public class MainActivity extends Activity {
+         renderedMode = "active";
+         page();
+         brandHeader("Rental");
++        addVerticalFlexSpacer();
+ 
+         LinearLayout card = heroCard();
+         statusPill(card, "RENTAL ACTIVE", R.color.pl_success_container, R.color.pl_success);
+@@ -353,6 +356,7 @@ public class MainActivity extends Activity {
+             friendlyTestBuildNotice();
+         renderNotificationAccessHint();
+ 
++        addVerticalFlexSpacer();
+         footer();
+     }
+ 
+@@ -360,6 +364,7 @@ public class MainActivity extends Activity {
+         renderedMode = "expired";
+         page();
+         brandHeader("Rental");
++        addVerticalFlexSpacer();
+ 
+         LinearLayout card = heroCard();
+         heroSymbol(card, "!", R.color.pl_warning_container, R.color.pl_warning);
+@@ -374,6 +379,7 @@ public class MainActivity extends Activity {
+         if (policy.isTimerQualificationBuild())
+             friendlyTestBuildNotice();
+ 
++        addVerticalFlexSpacer();
+         footer();
+     }
+ 
+@@ -381,6 +387,7 @@ public class MainActivity extends Activity {
+         renderedMode = "recovery";
+         page();
+         brandHeader("Rental");
++        addVerticalFlexSpacer();
+ 
+         LinearLayout card = heroCard();
+         heroSymbol(card, "!", R.color.pl_error_container, R.color.pl_error);
+@@ -389,6 +396,7 @@ public class MainActivity extends Activity {
+         heroBody(card, "This phone needs owner attention before it can be rented again.");
+ 
+         deviceCaption();
++        addVerticalFlexSpacer();
+         footer();
+     }
+ 
+@@ -474,6 +482,11 @@ public class MainActivity extends Activity {
+         return out.toString().trim();
+     }
+ 
++    private void addVerticalFlexSpacer() {
++        View spacer = new View(this);
++        root.addView(spacer, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
++    }
++
+     private void footer() {
+         TextView footer = text("Field test  •  v" + versionName(), 11, Typeface.NORMAL, R.color.pl_text_muted);
+         footer.setGravity(Gravity.CENTER);
+diff --git a/apps/consumer/app/src/main/java/com/jace/phonelending/consumer/PolicyController.java b/apps/consumer/app/src/main/java/com/jace/phonelending/consumer/PolicyController.java
+index 9d22b21..7a7134c 100644
+--- a/apps/consumer/app/src/main/java/com/jace/phonelending/consumer/PolicyController.java
++++ b/apps/consumer/app/src/main/java/com/jace/phonelending/consumer/PolicyController.java
+@@ -42,7 +42,8 @@ public final class PolicyController {
+             String versionName = context.getPackageManager()
+                     .getPackageInfo(context.getPackageName(), 0).versionName;
+             return "0.5.3-field".equals(versionName) || "0.5.4-field".equals(versionName)
+-                    || "0.5.5-field".equals(versionName) || "0.5.6-field".equals(versionName);
++                    || "0.5.5-field".equals(versionName) || "0.5.6-field".equals(versionName)
++                    || "0.5.8-field".equals(versionName);
+         } catch (Exception ignored) {
+             return false;
+         }
+@@ -126,6 +127,22 @@ public final class PolicyController {
+         } catch (Throwable ignored) {}
+     }
+ 
++    /**
++     * Presentation-only expiry handoff for the timer-qualification lane. Android may
++     * reject background Activity launches; failure must never alter authoritative expiry.
++     * This is deliberately a single best-effort handoff, not a replacement lock loop.
++     */
++    public void bringRentalStatusToFrontBestEffort() {
++        try {
++            Intent i = new Intent(context, MainActivity.class);
++            i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_SINGLE_TOP);
++            context.startActivity(i);
++            DiagnosticReporter.event("EXPIRY_UI_HANDOFF", "requested renter status foreground");
++        } catch (Throwable t) {
++            DiagnosticReporter.event("EXPIRY_UI_HANDOFF_BLOCKED", t.getClass().getSimpleName());
++        }
++    }
++
+     public void applyActiveAndOpenHome() {
+         if (isTimerQualificationBuild()) {
+             // No physical lock exists in this qualification lane; only return to the normal phone UI.
