@@ -1,0 +1,62 @@
+name: PhoneLending v0.7.0 Owner Design Master
+
+on:
+  push:
+    branches: [ batch12-v0.7.0-owner-design-master ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  compile_and_validate:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Reconstruct v0.7.0 owner-design candidate
+        run: bash tools/reconstruct-v070.sh
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v3
+      - run: sdkmanager "platform-tools" "platforms;android-36" "build-tools;36.0.0"
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.13'
+          cache-read-only: true
+      - name: Compile Host and Rental
+        run: gradle --no-daemon :host:assembleDebug :consumer:assembleFieldTest
+      - name: Validate code and architecture against owner design master
+        run: bash tools/validate-v070.sh
+      - name: Verify compile artifacts are unsigned
+        run: |
+          set -euo pipefail
+          APKSIGNER="$ANDROID_HOME/build-tools/36.0.0/apksigner"
+          HOST_APK="$(find apps/host/app/build/outputs/apk/debug -type f -name '*.apk' | head -n 1)"
+          RENTAL_APK="$(find apps/consumer/app/build/outputs/apk/fieldTest -type f -name '*.apk' | head -n 1)"
+          ! "$APKSIGNER" verify "$HOST_APK"
+          ! "$APKSIGNER" verify "$RENTAL_APK"
+      - name: Collect exact unsigned APKs
+        run: |
+          set -euo pipefail
+          mkdir -p out/unsigned
+          cp "$(find apps/host/app/build/outputs/apk/debug -type f -name '*.apk' | head -n 1)" out/unsigned/PhoneLending-Host-v0.7.0-vc15-dev-unsigned.apk
+          cp "$(find apps/consumer/app/build/outputs/apk/fieldTest -type f -name '*.apk' | head -n 1)" out/unsigned/PhoneLending-Rental-v0.5.9-vc14-field-unsigned.apk
+          sha256sum out/unsigned/*.apk > out/unsigned/SHA256SUMS.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: phonelending-v0.7.0-owner-design-unsigned
+          path: out/unsigned
+          retention-days: 14
+      - uses: actions/upload-artifact@v4
+        with:
+          name: phonelending-v0.7.0-owner-design-source
+          path: |
+            apps
+            Contracts
+            README.md
+            settings.gradle
+            build.gradle
+            gradle.properties
+          retention-days: 14
