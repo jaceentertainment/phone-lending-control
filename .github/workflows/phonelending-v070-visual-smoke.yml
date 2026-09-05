@@ -108,7 +108,7 @@ jobs:
             adb shell input keyevent 10
             adb shell input keyevent 4
             sleep 1
-            adb shell input tap 540 950
+            adb shell input tap 540 850
             sleep 5
             adb exec-out screencap -p > out/visual/01-dashboard.png
             adb shell uiautomator dump /sdcard/dashboard.xml >/dev/null || true
