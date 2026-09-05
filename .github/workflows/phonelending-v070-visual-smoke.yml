@@ -14,7 +14,7 @@ permissions:
 jobs:
   visual_smoke:
     runs-on: ubuntu-24.04
-    timeout-minutes: 25
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
 
@@ -28,15 +28,7 @@ jobs:
 
       - uses: android-actions/setup-android@v3
 
-      - name: Install SDK, emulator and API 35 image
-        run: |
-          yes | sdkmanager --licenses >/dev/null || true
-          sdkmanager \
-            "platform-tools" \
-            "platforms;android-35" \
-            "build-tools;36.0.0" \
-            "emulator" \
-            "system-images;android-35;google_apis;x86_64"
+      - run: sdkmanager "platform-tools" "platforms;android-35" "build-tools;36.0.0"
 
       - uses: gradle/actions/setup-gradle@v4
         with:
@@ -64,61 +56,54 @@ jobs:
             --out out/visual/PhoneLending-Host-v0.7.0-visual-smoke.apk out/visual/host-aligned.apk
           "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --verbose out/visual/PhoneLending-Host-v0.7.0-visual-smoke.apk
 
-      - name: Start emulator
+      - name: Enable KVM for emulator
         run: |
-          set -euo pipefail
-          sudo chmod 666 /dev/kvm || true
-          echo no | avdmanager create avd -f -n pl_visual -k "system-images;android-35;google_apis;x86_64" --device "pixel_6"
-          nohup "$ANDROID_HOME/emulator/emulator" \
-            -avd pl_visual \
-            -no-window -no-audio -no-boot-anim \
-            -gpu swiftshader_indirect \
-            -no-snapshot -wipe-data \
-            > out/visual/emulator.log 2>&1 &
-          adb wait-for-device
-          for i in $(seq 1 180); do
-            if [ "$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" = "1" ]; then
-              break
-            fi
+          if [ -e /dev/kvm ]; then
+            sudo chmod 666 /dev/kvm
+          fi
+
+      - name: Boot emulator and capture approved two-page Host shell
+        uses: ReactiveCircus/android-emulator-runner@v2
+        with:
+          api-level: 35
+          target: google_apis
+          arch: x86_64
+          profile: pixel_6
+          disable-animations: true
+          emulator-options: -no-snapshot-save -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
+          script: |
+            set -euo pipefail
+            mkdir -p out/visual
+            adb shell wm size 1080x2400
+            adb shell wm density 420
+            adb install -r out/visual/PhoneLending-Host-v0.7.0-visual-smoke.apk
+            adb shell am force-stop com.jace.phonelending.host.dev
+            adb shell monkey -p com.jace.phonelending.host.dev -c android.intent.category.LAUNCHER 1 >/dev/null
+            sleep 3
+
+            adb exec-out screencap -p > out/visual/01-dashboard.png
+            adb shell uiautomator dump /sdcard/dashboard.xml >/dev/null || true
+            adb pull /sdcard/dashboard.xml out/visual/01-dashboard.xml >/dev/null || true
+
+            # Owner Design Master: Settings is the left pager page; Dashboard is the right/root page.
+            adb shell input swipe 180 1200 900 1200 500
             sleep 2
-          done
-          test "$(adb shell getprop sys.boot_completed | tr -d '\r')" = "1"
-          adb shell settings put global window_animation_scale 0
-          adb shell settings put global transition_animation_scale 0
-          adb shell settings put global animator_duration_scale 0
-          adb shell wm size 1080x2400
-          adb shell wm density 420
-          sleep 3
+            adb exec-out screencap -p > out/visual/02-settings.png
+            adb shell uiautomator dump /sdcard/settings.xml >/dev/null || true
+            adb pull /sdcard/settings.xml out/visual/02-settings.xml >/dev/null || true
 
-      - name: Install and capture top-level Host screens
-        run: |
-          set -euo pipefail
-          APK=out/visual/PhoneLending-Host-v0.7.0-visual-smoke.apk
-          adb install -r "$APK"
-          adb shell am force-stop com.jace.phonelending.host.dev
-          adb shell monkey -p com.jace.phonelending.host.dev -c android.intent.category.LAUNCHER 1 >/dev/null
-          sleep 3
-          adb exec-out screencap -p > out/visual/01-dashboard.png
-          adb shell uiautomator dump /sdcard/dashboard.xml >/dev/null || true
-          adb pull /sdcard/dashboard.xml out/visual/01-dashboard.xml >/dev/null || true
+            # Return to Dashboard and prove the pager settles back to the root page.
+            adb shell input swipe 900 1200 180 1200 500
+            sleep 2
+            adb exec-out screencap -p > out/visual/03-dashboard-return.png
+            adb shell uiautomator dump /sdcard/dashboard-return.xml >/dev/null || true
+            adb pull /sdcard/dashboard-return.xml out/visual/03-dashboard-return.xml >/dev/null || true
 
-          # Bottom navigation is three equal semantic targets; use screen-relative centers.
-          adb shell input tap 540 2180
-          sleep 2
-          adb exec-out screencap -p > out/visual/02-devices.png
-          adb shell uiautomator dump /sdcard/devices.xml >/dev/null || true
-          adb pull /sdcard/devices.xml out/visual/02-devices.xml >/dev/null || true
-
-          adb shell input tap 900 2180
-          sleep 2
-          adb exec-out screencap -p > out/visual/03-settings.png
-          adb shell uiautomator dump /sdcard/settings.xml >/dev/null || true
-          adb pull /sdcard/settings.xml out/visual/03-settings.xml >/dev/null || true
-
-          adb shell dumpsys window windows > out/visual/window-dump.txt || true
-          adb shell dumpsys activity activities > out/visual/activity-dump.txt || true
+            adb shell dumpsys window windows > out/visual/window-dump.txt || true
+            adb shell dumpsys activity activities > out/visual/activity-dump.txt || true
 
       - name: Upload visual smoke evidence
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: phonelending-v0.7.0-visual-smoke-evidence
