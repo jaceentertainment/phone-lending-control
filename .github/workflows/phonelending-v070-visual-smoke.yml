@@ -99,7 +99,7 @@ jobs:
             adb shell input tap 540 1125
             sleep 3
             adb exec-out screencap -p > out/visual/00-operator-unlock.png
-            adb shell input tap 540 760
+            adb shell input tap 540 680
             adb shell input keyevent 9
             adb shell input keyevent 11
             adb shell input keyevent 13
