@@ -1,8 +1,6 @@
 name: PhoneLending v0.5.9 Signed Distribution
 
 on:
-  push:
-    branches: [ batch9-v0.5.9-combined-host-renovation ]
   workflow_dispatch:
 
 permissions:
