@@ -1,0 +1,56 @@
+name: PhoneLending v0.5.9 Combined Host Renovation
+
+on:
+  push:
+    branches: [ batch9-v0.5.9-combined-host-renovation ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  compile_and_validate:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Reconstruct v0.5.8 baseline and apply v0.5.9 Host renovation
+        run: bash tools/reconstruct-v059.sh
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v3
+      - run: sdkmanager "platform-tools" "platforms;android-36" "build-tools;36.0.0"
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.13'
+          cache-read-only: true
+      - name: Compile renovated Host and preserved Rental
+        run: gradle --no-daemon :host:assembleDebug :consumer:assembleFieldTest
+      - name: Validate combined UI milestone and protected boundaries
+        run: bash tools/validate-v059.sh
+      - name: Verify compile artifacts unsigned
+        run: |
+          APKSIGNER="$ANDROID_HOME/build-tools/36.0.0/apksigner"
+          HOST_APK="$(find apps/host/app/build/outputs/apk/debug -type f -name '*.apk' | head -n 1)"
+          RENTAL_APK="$(find apps/consumer/app/build/outputs/apk/fieldTest -type f -name '*.apk' | head -n 1)"
+          ! "$APKSIGNER" verify "$HOST_APK"
+          ! "$APKSIGNER" verify "$RENTAL_APK"
+      - name: Collect artifacts
+        run: |
+          mkdir -p out/source out/apks
+          cp "$(find apps/host/app/build/outputs/apk/debug -type f -name '*.apk' | head -n 1)" out/apks/PhoneLending-Host-v0.5.9-vc12-dev-UNSIGNED.apk
+          cp "$(find apps/consumer/app/build/outputs/apk/fieldTest -type f -name '*.apk' | head -n 1)" out/apks/PhoneLending-Rental-v0.5.8-vc13-field-PRESERVED-UNSIGNED.apk
+          sha256sum out/apks/*.apk > out/apks/SHA256SUMS.txt
+          cp -a apps contracts services signing README.md BUILD_TRIGGER.md build.gradle settings.gradle gradle.properties out/source/
+          printf '%s\n' "$GITHUB_SHA" > out/source/SOURCE_BRANCH_COMMIT.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: phonelending-v0.5.9-combined-host-renovation-unsigned
+          path: out/apks
+          retention-days: 14
+      - uses: actions/upload-artifact@v4
+        with:
+          name: phonelending-v0.5.9-combined-host-renovation-source
+          path: out/source
+          retention-days: 14
