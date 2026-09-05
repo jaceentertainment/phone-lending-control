@@ -1,0 +1,91 @@
+name: PhoneLending v0.7.0 Signed Distribution
+
+on:
+  push:
+    branches: [ batch12-v0.7.0-owner-design-master ]
+    paths:
+      - '.github/workflows/phonelending-v070-signed-distribution.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  signed_distribution:
+    runs-on: ubuntu-24.04
+    env:
+      PL_HOST_DEV_STORE_PASSWORD: ${{ secrets.PL_HOST_DEV_STORE_PASSWORD }}
+      PL_HOST_DEV_KEY_ALIAS: ${{ secrets.PL_HOST_DEV_KEY_ALIAS }}
+      PL_HOST_DEV_KEY_PASSWORD: ${{ secrets.PL_HOST_DEV_KEY_PASSWORD }}
+      PL_CONSUMER_DEV_STORE_PASSWORD: ${{ secrets.PL_CONSUMER_DEV_STORE_PASSWORD }}
+      PL_CONSUMER_DEV_KEY_ALIAS: ${{ secrets.PL_CONSUMER_DEV_KEY_ALIAS }}
+      PL_CONSUMER_DEV_KEY_PASSWORD: ${{ secrets.PL_CONSUMER_DEV_KEY_PASSWORD }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Reconstruct v0.7.0 owner-design source
+        run: bash tools/reconstruct-v070.sh
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v3
+      - run: sdkmanager "platform-tools" "platforms;android-36" "build-tools;36.0.0"
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.13'
+          cache-read-only: true
+      - name: Build exact unsigned APKs
+        run: gradle --no-daemon :host:assembleDebug :consumer:assembleFieldTest
+      - name: Validate code and architecture
+        run: bash tools/validate-v070.sh
+      - name: Materialize development signing keystores
+        env:
+          PL_HOST_DEV_KEYSTORE_B64: ${{ secrets.PL_HOST_DEV_KEYSTORE_B64 }}
+          PL_CONSUMER_DEV_KEYSTORE_B64: ${{ secrets.PL_CONSUMER_DEV_KEYSTORE_B64 }}
+        run: |
+          set -euo pipefail
+          test -n "$PL_HOST_DEV_KEYSTORE_B64"
+          test -n "$PL_CONSUMER_DEV_KEYSTORE_B64"
+          printf '%s' "$PL_HOST_DEV_KEYSTORE_B64" | base64 -d > host-dev.p12
+          printf '%s' "$PL_CONSUMER_DEV_KEYSTORE_B64" | base64 -d > consumer-dev.p12
+      - name: Sign with Android apksigner v1+v2+v3
+        run: |
+          set -euo pipefail
+          APKSIGNER="$ANDROID_HOME/build-tools/36.0.0/apksigner"
+          HOST_UNSIGNED="$(find apps/host/app/build/outputs/apk/debug -type f -name '*.apk' | head -n 1)"
+          RENTAL_UNSIGNED="$(find apps/consumer/app/build/outputs/apk/fieldTest -type f -name '*.apk' | head -n 1)"
+          mkdir -p out/signed
+          "$APKSIGNER" sign \
+            --ks host-dev.p12 --ks-type PKCS12 --ks-key-alias "$PL_HOST_DEV_KEY_ALIAS" \
+            --ks-pass env:PL_HOST_DEV_STORE_PASSWORD --key-pass env:PL_HOST_DEV_KEY_PASSWORD \
+            --v1-signing-enabled true --v2-signing-enabled true --v3-signing-enabled true --v4-signing-enabled false \
+            --out out/signed/PhoneLending-Host-v0.7.0-vc15-dev.apk "$HOST_UNSIGNED"
+          "$APKSIGNER" sign \
+            --ks consumer-dev.p12 --ks-type PKCS12 --ks-key-alias "$PL_CONSUMER_DEV_KEY_ALIAS" \
+            --ks-pass env:PL_CONSUMER_DEV_STORE_PASSWORD --key-pass env:PL_CONSUMER_DEV_KEY_PASSWORD \
+            --v1-signing-enabled true --v2-signing-enabled true --v3-signing-enabled true --v4-signing-enabled false \
+            --out out/signed/PhoneLending-Rental-v0.5.9-vc14-field.apk "$RENTAL_UNSIGNED"
+      - name: Verify signatures, identities, versions and native-library alignment
+        run: |
+          set -euo pipefail
+          APKSIGNER="$ANDROID_HOME/build-tools/36.0.0/apksigner"
+          AAPT2="$ANDROID_HOME/build-tools/36.0.0/aapt2"
+          ZIPALIGN="$ANDROID_HOME/build-tools/36.0.0/zipalign"
+          for apk in out/signed/*.apk; do
+            "$APKSIGNER" verify --verbose --print-certs "$apk" | tee "${apk}.verify.txt"
+            grep -q 'Verified using v2 scheme (APK Signature Scheme v2): true' "${apk}.verify.txt"
+            grep -q 'Verified using v3 scheme (APK Signature Scheme v3): true' "${apk}.verify.txt"
+            "$ZIPALIGN" -c -P 4 4 "$apk"
+          done
+          grep -qi 'e7da706d3a4692b6603b311d0856fe557815ee9db59d9399b04910875c67352f' out/signed/PhoneLending-Host-v0.7.0-vc15-dev.apk.verify.txt
+          grep -qi '8b46873ee7d9fec4cecc2faa03694e8001e1ad42accf862257222f74174936c9' out/signed/PhoneLending-Rental-v0.5.9-vc14-field.apk.verify.txt
+          test "$($AAPT2 dump packagename out/signed/PhoneLending-Host-v0.7.0-vc15-dev.apk)" = 'com.jace.phonelending.host.dev'
+          test "$($AAPT2 dump packagename out/signed/PhoneLending-Rental-v0.5.9-vc14-field.apk)" = 'com.jace.phonelending.consumer.field'
+          $AAPT2 dump badging out/signed/PhoneLending-Host-v0.7.0-vc15-dev.apk | grep -q "versionCode='15' versionName='0.7.0-dev'"
+          $AAPT2 dump badging out/signed/PhoneLending-Rental-v0.5.9-vc14-field.apk | grep -q "versionCode='14' versionName='0.5.9-field'"
+          sha256sum out/signed/PhoneLending-Host-v0.7.0-vc15-dev.apk out/signed/PhoneLending-Rental-v0.5.9-vc14-field.apk > out/signed/SHA256SUMS.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: phonelending-v0.7.0-installable-signed
+          path: out/signed
+          retention-days: 14
