@@ -1,0 +1,5 @@
+# Temporary encrypted recovery pointer
+
+This points only to encrypted ciphertext. It contains no plaintext APK/source and no decryption key or IV.
+
+[Encrypted recovery asset](https://release-assets.githubusercontent.com/github-production-release-asset/1352454165/9e50de6d-1cff-40f2-9cfd-201d23769932?sp=r&sv=2018-11-09&sr=b&spr=https&se=2026-09-17T11%3A07%3A38Z&rscd=attachment%3B+filename%3DReddit-Assistant-v5.14.85-field-pending-debug.apk.enc&rsct=application%2Foctet-stream&skoid=96c2d410-5711-43a1-aedd-ab1947aa7ab0&sktid=398a6654-997b-47e9-b12b-9515b896b4de&skt=2026-09-17T10%3A07%3A09Z&ske=2026-09-17T11%3A07%3A38Z&sks=b&skv=2018-11-09&sig=%2FikuZMoYs6q4lxvibLLsn3MHfH%2FFS%2BSzGVqDnwoO9WU%3D&jwt=eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJpc3MiOiJnaXRodWIuY29tIiwiYXVkIjoicmVsZWFzZS1hc3NldHMuZ2l0aHVidXNlcmNvbnRlbnQuY29tIiwia2V5Ijoia2V5MSIsImV4cCI6MTc4OTY0MjMzOCwibmJmIjoxNzg5NjQwNTM4LCJwYXRoIjoicmVsZWFzZWFzc2V0cHJvZHVjdGlvbi5ibG9iLmNvcmUud2luZG93cy5uZXQifQ.5g8xl9Y-Ix__2Z7V6-2x7SPuuP-iQJ1Eb7GdKmBE878&response-content-disposition=attachment%3B%20filename%3DReddit-Assistant-v5.14.85-field-pending-debug.apk.enc&response-content-type=application%2Foctet-stream)
